@@ -204,6 +204,10 @@ def test_responder_prompt_defines_consultative_conversation_contract() -> None:
     assert "known_facts e pending_goal como a fonte atual" in system_prompt
     assert "Pergunte o nome somente quando pending_goal for name" in system_prompt
     assert "Se known_facts já contiver um nome validado, não pergunte de novo" in system_prompt
+    assert "cidade e estado (UF) juntos" in system_prompt
+    assert "peça os dois juntos em uma pergunta principal" in system_prompt
+    assert "Se apenas um estiver ausente, pergunte somente o campo faltante" in system_prompt
+    assert "Não deduza nem confirme uma UF sem o lead tê-la informado" in system_prompt
 
 
 def test_interpreter_prompt_validates_contact_profile_name_as_untrusted_context() -> None:
@@ -220,6 +224,7 @@ def test_interpreter_prompt_validates_contact_profile_name_as_untrusted_context(
     assert "Use null para nome de empresa, frase, identificador, rótulo genérico" in system_prompt
     assert "Nunca copie contact_profile_name para qualification_updates.name" in system_prompt
     assert "preencha name somente quando o lead afirmar um nome de pessoa" in system_prompt
+    assert "Não deduza a UF pelo nome do município, pelo DDD" in system_prompt
     assert "{{contact_profile_label}}" in user_prompt
 
 
