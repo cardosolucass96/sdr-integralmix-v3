@@ -41,6 +41,7 @@ def _invoke_interpreter(
     context = runtime.context if runtime and runtime.context else default_agent_run_context()
     token = _RUNTIME_SETTINGS.set(context.settings)
     try:
+        profile_label = context.lead_profile_label
         result = invoke_with_temperature_fallback(
             _build_interpreter_chain,
             {
@@ -50,6 +51,10 @@ def _invoke_interpreter(
                     state.get("known_facts") or {},
                     ensure_ascii=False,
                     separators=(",", ":"),
+                ),
+                "contact_profile_label": json.dumps(
+                    profile_label,
+                    ensure_ascii=False,
                 ),
             },
             config=config,

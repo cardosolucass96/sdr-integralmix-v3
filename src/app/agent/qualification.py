@@ -37,15 +37,37 @@ def _interpretation(state: dict[str, Any]) -> IntegralMixTurnInterpretation:
     return IntegralMixTurnInterpretation.model_validate(state.get("last_interpretation") or {})
 
 
-def _merge_fact_updates(
-    current_facts: dict[str, Any],
-    current_sources: dict[str, str],
-    interpretation: IntegralMixTurnInterpretation,
-) -> tuple[dict[str, Any], dict[str, str]]:
-    facts = dict(current_facts)
-    sources = dict(current_sources)
-    updates = interpretation.qualification_updates.model_dump(exclude_none=True)
+def _clean_person_name(value: object) -> str | None:
+    """Normalize spacing in a name already validated by structured interpretation."""
+    if not isinstance(value, str):
+        return None
+    cleaned = " ".join(value.split())
+    return cleaned or None
 
+
+def _merge_contact_name(
+    facts: dict[str, Any],
+    sources: dict[str, str],
+    profile_name: object,
+) -> None:
+    existing_name = _clean_person_name(facts.get("name"))
+    if existing_name:
+        facts["name"] = existing_name
+    else:
+        facts.pop("name", None)
+        sources.pop("name", None)
+
+    profile_name = _clean_person_name(profile_name)
+    if profile_name and not facts.get("name"):
+        facts["name"] = profile_name
+        sources["name"] = "contact_profile"
+
+
+def _clear_obsolete_activity_facts(
+    facts: dict[str, Any],
+    sources: dict[str, str],
+    updates: dict[str, Any],
+) -> None:
     new_activity = updates.get("activity")
     old_activity = facts.get("activity")
     if new_activity and old_activity and new_activity != old_activity:
@@ -56,14 +78,24 @@ def _merge_fact_updates(
         facts.pop("routing_segment", None)
         sources.pop("routing_segment", None)
 
+
+def _merge_lead_facts(
+    facts: dict[str, Any],
+    sources: dict[str, str],
+    updates: dict[str, Any],
+) -> None:
     for field in _FACT_FIELDS:
         value = updates.get(field)
+        if field == "name":
+            value = _clean_person_name(value)
         if isinstance(value, str):
             value = value.strip()
         if value:
             facts[field] = value
             sources[field] = "lead_message"
 
+
+def _apply_reseller_business_rule(facts: dict[str, Any], sources: dict[str, str]) -> None:
     if facts.get("activity") == "revendedor":
         if facts.get("works_with_nutrition") == "nao":
             facts["current_brands"] = _NO_NUTRITION_BRANDS_MARKER
@@ -75,9 +107,31 @@ def _merge_fact_updates(
             facts.pop("current_brands", None)
             sources.pop("current_brands", None)
 
-    if interpretation.routing_segment is not None:
-        facts["routing_segment"] = interpretation.routing_segment
+
+def _merge_routing_segment(
+    facts: dict[str, Any],
+    sources: dict[str, str],
+    segment: str | None,
+) -> None:
+    if segment is not None:
+        facts["routing_segment"] = segment
         sources["routing_segment"] = "structured_classification"
+
+
+def _merge_fact_updates(
+    current_facts: dict[str, Any],
+    current_sources: dict[str, str],
+    interpretation: IntegralMixTurnInterpretation,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    facts = dict(current_facts)
+    sources = dict(current_sources)
+    _merge_contact_name(facts, sources, interpretation.contact_profile_name)
+
+    updates = interpretation.qualification_updates.model_dump(exclude_none=True)
+    _clear_obsolete_activity_facts(facts, sources, updates)
+    _merge_lead_facts(facts, sources, updates)
+    _apply_reseller_business_rule(facts, sources)
+    _merge_routing_segment(facts, sources, interpretation.routing_segment)
 
     return facts, sources
 

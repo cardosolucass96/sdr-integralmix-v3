@@ -11,6 +11,7 @@ from app.agent.routing import route_after_qualification
 def _turn(
     *,
     updates: dict[str, object] | None = None,
+    contact_profile_name: str | None = None,
     routing_segment: str | None = None,
     refusal: bool = False,
     goodbye: bool = False,
@@ -20,10 +21,50 @@ def _turn(
         reason="Lead respondeu à qualificação.",
         refusal=refusal,
         goodbye=goodbye,
+        contact_profile_name=contact_profile_name,
         qualification_updates=QualificationFactUpdates.model_validate(updates or {}),
         routing_segment=routing_segment,
     )
     return {"last_interpretation": interpretation.model_dump(mode="json")}
+
+
+def test_valid_contact_profile_name_is_reused() -> None:
+    result = update_qualification(_turn(contact_profile_name="  Maria da Silva  "))
+
+    assert result["known_facts"]["name"] == "Maria da Silva"
+    assert result["fact_sources"]["name"] == "contact_profile"
+    assert result["pending_goal"] == "document"
+
+
+def test_invalid_contact_profile_name_keeps_name_as_next_question() -> None:
+    # Structured interpretation rejects the business label before qualification.
+    result = update_qualification(_turn(contact_profile_name=None))
+
+    assert "name" not in result["known_facts"]
+    assert result["pending_goal"] == "name"
+
+
+def test_lead_message_name_overrides_valid_contact_profile_name() -> None:
+    result = update_qualification(
+        _turn(updates={"name": "Ana Souza"}, contact_profile_name="Maria Silva")
+    )
+
+    assert result["known_facts"]["name"] == "Ana Souza"
+    assert result["fact_sources"]["name"] == "lead_message"
+
+
+def test_invalid_existing_name_type_is_removed_from_facts() -> None:
+    result = update_qualification(
+        {
+            **_turn(),
+            "known_facts": {"name": 123},
+            "fact_sources": {"name": "lead_message"},
+        }
+    )
+
+    assert "name" not in result["known_facts"]
+    assert "name" not in result["fact_sources"]
+    assert result["pending_goal"] == "name"
 
 
 def test_creator_facts_create_deterministic_handoff_only_when_complete() -> None:

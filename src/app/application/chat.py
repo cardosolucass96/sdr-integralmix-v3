@@ -30,9 +30,12 @@ def run_chat_turn(
     tags: tuple[str, ...] | None = None,
     settings: Settings | None = None,
     integral_mix_handoff_action: Callable[[dict[str, object]], dict[str, object]] | None = None,
+    lead_profile_label: str | None = None,
 ) -> ChatTurnResult:
+    state: dict[str, Any] = {"messages": [HumanMessage(content=message)]}
+
     result = run_agent(
-        {"messages": [HumanMessage(content=message)]},
+        state,
         session_id=session_id or thread_id,
         user_id=user_id,
         tags=tags,
@@ -41,6 +44,7 @@ def run_chat_turn(
         graph=graph,
         settings=settings,
         integral_mix_handoff_action=integral_mix_handoff_action,
+        lead_profile_label=lead_profile_label,
     )
     return _chat_turn_result(result, thread_id=thread_id)
 

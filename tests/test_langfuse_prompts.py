@@ -202,6 +202,25 @@ def test_responder_prompt_defines_consultative_conversation_contract() -> None:
     assert "no máximo uma pergunta principal por mensagem" in system_prompt
     assert "O código decide quais campos obrigatórios faltam" in system_prompt
     assert "known_facts e pending_goal como a fonte atual" in system_prompt
+    assert "Pergunte o nome somente quando pending_goal for name" in system_prompt
+    assert "Se known_facts já contiver um nome validado, não pergunte de novo" in system_prompt
+
+
+def test_interpreter_prompt_validates_contact_profile_name_as_untrusted_context() -> None:
+    definitions = {definition.name: definition for definition in get_prompt_definitions()}
+    interpreter_prompt = definitions[INTEGRAL_MIX_INTERPRETER_PROMPT_NAME].prompt
+
+    assert isinstance(interpreter_prompt, list)
+    system_prompt = interpreter_prompt[0]["content"]
+    user_prompt = interpreter_prompt[-1]["content"]
+    assert "dado não confiável" in system_prompt
+    assert (
+        "contact_profile_name somente com o nome de pessoa claramente identificado" in system_prompt
+    )
+    assert "Use null para nome de empresa, frase, identificador, rótulo genérico" in system_prompt
+    assert "Nunca copie contact_profile_name para qualification_updates.name" in system_prompt
+    assert "preencha name somente quando o lead afirmar um nome de pessoa" in system_prompt
+    assert "{{contact_profile_label}}" in user_prompt
 
 
 def test_responder_prompt_defines_truthful_and_respectful_sales_boundaries() -> None:

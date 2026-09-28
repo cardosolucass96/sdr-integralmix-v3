@@ -14,9 +14,13 @@ O prompt `integral-mix/responder-v2` preserva a persona da Raquel: português br
 acolhedor, profissional e objetivo, uma pergunta principal por vez, sem repetir dados já informados.
 Blocos separados por linha em branco podem ser enviados como bolhas distintas no WhatsApp.
 
-A qualificação segue a ordem do workflow original para criadores e revendedores. Fatos confirmados
-e corrigidos são mesclados no estado por código e sua fonte é registrada; o responder recebe
-`known_facts` e `pending_goal`, sem decidir a completude nem montar o handoff. Perguntas sobre
+A interpretação estruturada valida o rótulo de contato enviado pelo Pipefacil e aproveita o nome
+quando ele identifica claramente uma pessoa. Rótulos de empresa, frases ou identificadores deixam
+o campo pendente para a Raquel perguntar. Se houver nome válido, ela segue ao próximo campo sem
+repeti-lo. O rótulo bruto fica no contexto da execução e não é salvo no estado da conversa. O
+restante da qualificação segue a ordem do workflow original para criadores e revendedores. Fatos
+confirmados e corrigidos são mesclados no estado por código e sua fonte é registrada; o responder
+recebe `known_facts` e `pending_goal`, sem decidir a completude nem montar o handoff. Perguntas sobre
 preço, desconto, pagamento ou frete recebem uma resposta sem valores e depois a conversa retoma o
 próximo campo pendente. Financeiro, vagas e compras usam somente os contatos aprovados no prompt.
 O agente não dá orientação técnica de produto e não promete encaminhamento técnico: a integração

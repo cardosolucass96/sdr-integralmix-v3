@@ -1,7 +1,7 @@
-"""Per-invocation dependencies for LangGraph nodes.
+"""Per-invocation dependencies and hints for LangGraph nodes.
 
-Only non-sensitive runtime settings enter this context. They are not part of the graph
-state and are therefore never checkpointed with the lead conversation.
+Values here are not part of graph state and are never checkpointed. The interpreter validates
+profile labels before promoting a recognized personal name to durable conversation facts.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from app.core.config import (
 class AgentRunContext:
     settings: RuntimeSettings
     integral_mix_handoff_action: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    lead_profile_label: str | None = None
 
 
 def default_agent_run_context() -> AgentRunContext:

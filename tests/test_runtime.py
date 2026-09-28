@@ -64,6 +64,27 @@ def test_reset_thread_state_deletes_all_checkpoints_for_thread() -> None:
     assert deleted_threads == ["thread-to-reset"]
 
 
+def test_run_agent_passes_profile_label_only_in_runtime_context() -> None:
+    captured: dict[str, object] = {}
+
+    class FakeGraph:
+        def invoke(self, state, *, config=None, context=None):
+            captured["state"] = state
+            captured["context"] = context
+            return state
+
+    state = {"messages": [HumanMessage(content="oi")]}
+    result = run_agent(
+        state,
+        graph=FakeGraph(),
+        lead_profile_label="Ana Souza",
+    )
+
+    assert result == state
+    assert "lead_profile_label" not in captured["state"]
+    assert captured["context"].lead_profile_label == "Ana Souza"
+
+
 def test_update_thread_state_persists_application_owned_values() -> None:
     calls: list[tuple[dict[str, object], dict[str, object]]] = []
 

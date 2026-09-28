@@ -198,6 +198,7 @@ def run_agent(
     replace_messages: bool = False,
     settings: Settings | None = None,
     integral_mix_handoff_action: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    lead_profile_label: str | None = None,
 ) -> AgentState:
     execution_settings = settings or build_execution_settings(
         get_bootstrap_settings(), RuntimeSettings()
@@ -236,6 +237,7 @@ def run_agent(
                 context=AgentRunContext(
                     settings=runtime_settings_from_execution(execution_settings),
                     integral_mix_handoff_action=integral_mix_handoff_action,
+                    lead_profile_label=lead_profile_label,
                 ),
             )
             if observation is not None:

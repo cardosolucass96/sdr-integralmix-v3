@@ -210,6 +210,7 @@ def test_run_chat_turn_calls_agent_with_thread_and_trace_context(
         session_id="session-1",
         user_id="user-1",
         metadata={"source": "api"},
+        lead_profile_label="Ana Souza",
     )
 
     assert result == ChatTurnResult(
@@ -222,6 +223,8 @@ def test_run_chat_turn_calls_agent_with_thread_and_trace_context(
         response_parts=[ResponsePartResult(type="text", text="Resposta centralizada.")],
     )
     assert captured["state"]["messages"][0].content == "oi"
+    assert "lead_profile_label" not in captured["state"]
+    assert captured["lead_profile_label"] == "Ana Souza"
     assert captured["session_id"] == "session-1"
     assert captured["user_id"] == "user-1"
     assert captured["metadata"] == {"source": "api"}
@@ -1037,17 +1040,21 @@ def test_handle_pipefacil_message_received_maps_event_and_sends_outbound(
 ) -> None:
     fake_logger = FakeLogger()
     outbound_calls: list[dict[str, object]] = []
+    agent_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(pipefacil_application, "LOGGER", fake_logger)
     monkeypatch.setattr(
         pipefacil_application,
         "run_chat_turn",
-        lambda **kwargs: ChatTurnResult(
-            thread_id=kwargs["thread_id"],
-            intent="greeting",
-            intent_reason="Saudacao curta.",
-            response_text="Oi! Recebi sua mensagem.",
-            status="responded",
+        lambda **kwargs: (
+            agent_calls.append(kwargs)
+            or ChatTurnResult(
+                thread_id=kwargs["thread_id"],
+                intent="greeting",
+                intent_reason="Saudacao curta.",
+                response_text="Oi! Recebi sua mensagem.",
+                status="responded",
+            )
         ),
     )
     monkeypatch.setattr(
@@ -1085,6 +1092,7 @@ def test_handle_pipefacil_message_received_maps_event_and_sends_outbound(
         response_parts=[ResponsePartResult(type="text", text="Oi! Recebi sua mensagem.")],
         delivery_status="sent",
     )
+    assert agent_calls[0]["lead_profile_label"] == "CLIENTE EXEMPLO"
     assert outbound_calls == [
         {
             "to": "+55 (11) 00000-0001",

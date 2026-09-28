@@ -91,6 +91,13 @@ class IntegralMixTurnInterpretation(IntentClassification):
     goodbye: bool = False
     human_handoff_requested: bool = False
     question_summary: str | None = None
+    contact_profile_name: str | None = Field(
+        default=None,
+        description=(
+            "A personal name clearly recognized in the untrusted Pipefacil contact label, "
+            "or null when the label is absent, unclear, generic, or describes a business."
+        ),
+    )
     qualification_updates: QualificationFactUpdates = Field(
         default_factory=QualificationFactUpdates
     )
@@ -251,6 +258,7 @@ class OpenAIIntegralMixTurnInterpretation(OpenAIIntentClassification):
     goodbye: bool
     human_handoff_requested: bool
     question_summary: str | None
+    contact_profile_name: str | None
     qualification_updates: OpenAIQualificationFactUpdates
     routing_segment: SupervisorRoutingSegment | None
 

@@ -432,6 +432,7 @@ def _handle_pipefacil_message_received_once(
                 metadata=trace_metadata,
                 graph=graph,
                 settings=settings,
+                lead_profile_label=payload.data.contact.name,
                 integral_mix_handoff_action=_build_integral_mix_handoff_action(
                     payload,
                     supervisor_service=supervisor_service,
