@@ -21,6 +21,7 @@ from app.integrations.pipefacil import (
     download_pipefacil_media,
     fetch_deal_by_seq,
     fetch_pipefacil_conversation_history,
+    fetch_pipefacil_pipelines,
     normalize_message_received_content,
     send_public_text_message,
     send_whatsapp_media_message,
@@ -308,6 +309,7 @@ def test_send_public_text_message_posts_expected_public_api_payload() -> None:
     result = send_public_text_message(
         to="+5511000000001",
         text="Oi! Recebi sua mensagem.",
+        channel_id="channel-1",
         sender_phone_number_id="111111111111111",
         profile_name="CLIENTE EXEMPLO",
         settings=settings,
@@ -319,13 +321,14 @@ def test_send_public_text_message_posts_expected_public_api_payload() -> None:
     assert result.request_id == "req-123"
     assert captured == {
         "method": "POST",
-        "url": "https://api.pipefacil.test/api/v1/messages",
+        "url": "https://api.pipefacil.test/api/v1/conversations/messages",
         "authorization": "Bearer pf_live_1234567890abcdef.example",
         "user_agent": "SDR-Pipefacil/0.1.0",
         "payload": {
             "to": "+5511000000001",
             "type": "text",
             "text": "Oi! Recebi sua mensagem.",
+            "channelId": "channel-1",
             "senderPhoneNumberId": "111111111111111",
         },
     }
@@ -457,6 +460,79 @@ def test_fetch_deal_by_seq_raises_without_api_key() -> None:
     assert exc_info.value.error_code == "pipefacil_api_key_missing"
 
 
+def test_fetch_pipefacil_pipelines_reads_public_pipeline_catalog() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["url"] = str(request.url)
+        captured["authorization"] = request.headers["authorization"]
+        return httpx.Response(
+            200,
+            json={"data": [{"id": "pipeline-1", "stages": []}]},
+        )
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://api.pipefacil.test",
+    )
+    settings = Settings(
+        _env_file=None,
+        pipefacil_api_key="pf_live_1234567890abcdef.example",
+        pipefacil_base_url="https://api.pipefacil.test",
+    )
+
+    assert fetch_pipefacil_pipelines(settings=settings, client=client) == [
+        {"id": "pipeline-1", "stages": []}
+    ]
+    assert captured == {
+        "method": "GET",
+        "url": "https://api.pipefacil.test/api/v1/pipelines",
+        "authorization": "Bearer pf_live_1234567890abcdef.example",
+    }
+
+
+def test_fetch_pipefacil_pipelines_validates_key_and_response() -> None:
+    with pytest.raises(PipefacilDealLookupError) as missing_key:
+        fetch_pipefacil_pipelines(settings=Settings(_env_file=None, pipefacil_api_key=None))
+    assert missing_key.value.error_code == "pipefacil_api_key_missing"
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"data": {}})),
+        base_url="https://api.pipefacil.test",
+    )
+    with pytest.raises(PipefacilDealLookupError) as invalid_response:
+        fetch_pipefacil_pipelines(
+            settings=Settings(_env_file=None, pipefacil_api_key="pf-live"),
+            client=client,
+        )
+    assert invalid_response.value.error_code == "pipefacil_pipeline_response_invalid"
+
+
+def test_fetch_pipefacil_pipelines_maps_transport_and_upstream_errors() -> None:
+    transport_client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: (_ for _ in ()).throw(httpx.ConnectError("offline", request=request))
+        ),
+        base_url="https://api.pipefacil.test",
+    )
+    settings = Settings(_env_file=None, pipefacil_api_key="pf-live")
+    with pytest.raises(PipefacilDealLookupError) as transport_error:
+        fetch_pipefacil_pipelines(settings=settings, client=transport_client)
+    assert transport_error.value.error_code == "pipefacil_transport_error"
+
+    upstream_client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(403, json={"error": "forbidden"})
+        ),
+        base_url="https://api.pipefacil.test",
+    )
+    with pytest.raises(PipefacilDealLookupError) as upstream_error:
+        fetch_pipefacil_pipelines(settings=settings, client=upstream_client)
+    assert upstream_error.value.error_code == "pipefacil_upstream_error"
+    assert upstream_error.value.status_code == 403
+
+
 def test_update_deal_properties_patches_public_api_deal_payload() -> None:
     captured: dict[str, object] = {}
 
@@ -485,6 +561,8 @@ def test_update_deal_properties_patches_public_api_deal_payload() -> None:
     result = update_deal_properties(
         seq=100,
         properties={"priority": "low"},
+        stage_id="stage-handoff",
+        notes="Qualification note",
         settings=settings,
         client=client,
     )
@@ -495,7 +573,11 @@ def test_update_deal_properties_patches_public_api_deal_payload() -> None:
         "method": "PATCH",
         "url": "https://api.pipefacil.test/api/v1/deals/100",
         "authorization": "Bearer pf_live_1234567890abcdef.example",
-        "payload": {"customFields": {"priority": "low"}},
+        "payload": {
+            "customFields": {"priority": "low"},
+            "stageId": "stage-handoff",
+            "notes": "Qualification note",
+        },
     }
 
 
@@ -508,6 +590,29 @@ def test_update_deal_properties_raises_without_api_key() -> None:
         )
 
     assert exc_info.value.error_code == "pipefacil_api_key_missing"
+
+
+@pytest.mark.parametrize(
+    ("stage_id", "notes", "expected_error"),
+    [
+        ("  ", None, "pipefacil_stage_id_missing"),
+        (None, "x" * 2001, "pipefacil_deal_notes_too_long"),
+    ],
+)
+def test_update_deal_properties_validates_optional_stage_and_notes(
+    stage_id: str | None,
+    notes: str | None,
+    expected_error: str,
+) -> None:
+    with pytest.raises(PipefacilDealUpdateError) as exc_info:
+        update_deal_properties(
+            seq=100,
+            properties={"priority": "low"},
+            stage_id=stage_id,
+            notes=notes,
+            settings=Settings(_env_file=None, pipefacil_api_key="pf-live"),
+        )
+    assert exc_info.value.error_code == expected_error
 
 
 def test_update_deal_stage_patches_public_api_deal_payload() -> None:
@@ -763,7 +868,7 @@ def test_send_whatsapp_media_message_posts_expected_payload() -> None:
     assert result.request_id == "req-media-123"
     assert captured == {
         "method": "POST",
-        "url": "https://api.pipefacil.test/api/v1/messages",
+        "url": "https://api.pipefacil.test/api/v1/conversations/messages",
         "authorization": "Bearer pf_live_1234567890abcdef.example",
         "payload": {
             "to": "+5511000000001",

@@ -8,6 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 
 from app.api.dependencies import (
     get_graph,
+    get_integral_mix_supervisor_service,
     get_pipefacil_message_idempotency_store,
     get_settings,
 )
@@ -22,6 +23,7 @@ from app.application import (
     handle_pipefacil_message_received,
     validate_pipefacil_message_received,
 )
+from app.application.supervisores import IntegralMixSupervisorService
 from app.core.config import Settings
 from app.core.logging import raw_log_value
 
@@ -31,6 +33,10 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 IdempotencyStoreDep = Annotated[
     MessageIdempotencyStore,
     Depends(get_pipefacil_message_idempotency_store),
+]
+SupervisorServiceDep = Annotated[
+    IntegralMixSupervisorService | None,
+    Depends(get_integral_mix_supervisor_service),
 ]
 LOGGER = logging.getLogger(__name__)
 
@@ -47,6 +53,7 @@ def message_received(
     settings: SettingsDep,
     idempotency_store: IdempotencyStoreDep,
     response: Response,
+    supervisor_service: SupervisorServiceDep,
 ) -> ChatResponse:
     received_extra = {
         **build_pipefacil_message_received_log_context(payload),
@@ -84,6 +91,7 @@ def message_received(
         graph=graph,
         settings=settings,
         idempotency_store=idempotency_store,
+        supervisor_service=supervisor_service,
     )
     response.status_code = status.HTTP_200_OK
     LOGGER.info(
@@ -111,6 +119,7 @@ def _process_pipefacil_message_received(
     graph: Any,
     settings: Settings,
     idempotency_store: MessageIdempotencyStore,
+    supervisor_service: IntegralMixSupervisorService | None = None,
 ) -> None:
     start = time.perf_counter()
     try:
@@ -119,6 +128,7 @@ def _process_pipefacil_message_received(
             graph=graph,
             settings=settings,
             idempotency_store=idempotency_store,
+            supervisor_service=supervisor_service,
         )
     except Exception as exc:
         LOGGER.exception(

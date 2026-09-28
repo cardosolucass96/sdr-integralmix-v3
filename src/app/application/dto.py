@@ -41,6 +41,7 @@ class ChatTurnResult:
     status: str
     response_messages: list[str] = field(default_factory=list)
     response_parts: list[ResponsePartResult] = field(default_factory=list)
+    supervisor_handoff_request: dict[str, object] | None = None
     delivery_status: PipefacilDeliveryStatus | None = None
     delivery_error: PipefacilDeliveryErrorCode | None = None
     response_audio: ResponseAudioResult | None = None

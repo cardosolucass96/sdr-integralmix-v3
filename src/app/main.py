@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Mapping, Sequence
@@ -26,7 +27,12 @@ from app.application.idempotency import (
     InMemoryMessageIdempotencyStore,
     MessageIdempotencyStore,
 )
+from app.application.integral_mix_handoff import process_pending_integral_mix_handoffs
 from app.application.runtime_settings import InMemoryRuntimeSettingsStore, RuntimeSettingsService
+from app.application.supervisores import (
+    InMemoryIntegralMixSupervisorStore,
+    IntegralMixSupervisorService,
+)
 from app.core import (
     RuntimeConfigurationError,
     RuntimeSettings,
@@ -36,6 +42,9 @@ from app.core import (
     get_bootstrap_settings,
 )
 from app.integrations.postgres_idempotency import PostgresMessageIdempotencyStore
+from app.integrations.postgres_integral_mix_supervisors import (
+    PostgresIntegralMixSupervisorStore,
+)
 from app.integrations.postgres_runtime_settings import PostgresRuntimeSettingsStore
 from app.observability import flush_langfuse, warm_up_langfuse
 
@@ -45,6 +54,7 @@ MAX_VALIDATION_LOG_ITEMS = 8
 MAX_VALIDATION_BODY_SHAPE_ITEMS = 80
 MAX_VALIDATION_BODY_SHAPE_DEPTH = 5
 APPLICATION_ENV = "production"
+SUPERVISOR_HANDOFF_POLL_SECONDS = 5
 
 
 def _is_production_environment(app_env: str) -> bool:
@@ -149,6 +159,68 @@ def _build_runtime_settings_service(
         )
     store.setup()
     return RuntimeSettingsService(store, bootstrap, app_env=app_env)
+
+
+def _build_integral_mix_supervisor_service(
+    runtime: AgentGraphRuntime,
+) -> IntegralMixSupervisorService:
+    if runtime.database_pool is None:
+        store = InMemoryIntegralMixSupervisorStore()
+    else:
+        store = PostgresIntegralMixSupervisorStore(
+            runtime.database_pool,
+            schema=runtime.database_schema,
+        )
+        store.setup()
+    return IntegralMixSupervisorService(store)
+
+
+def _process_integral_mix_supervisor_handoff_batch(
+    service: IntegralMixSupervisorService,
+    runtime_settings_service: RuntimeSettingsService,
+) -> int:
+    return process_pending_integral_mix_handoffs(
+        service,
+        settings=runtime_settings_service.get_execution_settings(),
+    )
+
+
+async def _run_integral_mix_supervisor_handoff_worker(
+    *,
+    stop_event: asyncio.Event,
+    service: IntegralMixSupervisorService,
+    runtime_settings_service: RuntimeSettingsService,
+) -> None:
+    while not stop_event.is_set():
+        try:
+            processed = await asyncio.to_thread(
+                _process_integral_mix_supervisor_handoff_batch,
+                service,
+                runtime_settings_service,
+            )
+            if processed:
+                LOGGER.info(
+                    "integral_mix.supervisor_handoff_worker.processed",
+                    extra={
+                        "pipeline_step": "integral_mix.supervisor_handoff_worker.processed",
+                        "processed_count": processed,
+                    },
+                )
+        except Exception:
+            LOGGER.exception(
+                "integral_mix.supervisor_handoff_worker.failed",
+                extra={
+                    "pipeline_step": "integral_mix.supervisor_handoff_worker.failed",
+                },
+            )
+
+        try:
+            await asyncio.wait_for(
+                stop_event.wait(),
+                timeout=SUPERVISOR_HANDOFF_POLL_SECONDS,
+            )
+        except TimeoutError:
+            continue
 
 
 def _route_path(request: Request) -> str:
@@ -295,6 +367,7 @@ def create_app(*, app_env: str | None = None) -> FastAPI:
         runtime = build_runtime(initial_settings)
         try:
             idempotency_store = _build_pipefacil_message_idempotency_store(runtime)
+            supervisor_service = _build_integral_mix_supervisor_service(runtime)
             runtime_settings_service = _build_runtime_settings_service(
                 runtime,
                 bootstrap=bootstrap,
@@ -310,9 +383,19 @@ def create_app(*, app_env: str | None = None) -> FastAPI:
         app.state.graph = runtime.graph
         app.state.checkpointer = runtime.checkpointer
         app.state.pipefacil_message_idempotency_store = idempotency_store
+        app.state.integral_mix_supervisor_service = supervisor_service
         app.state.bootstrap_settings = bootstrap
         app.state.runtime_settings_service = runtime_settings_service
         app.state.settings = settings
+        supervisor_handoff_worker_stop = asyncio.Event()
+        supervisor_handoff_worker = asyncio.create_task(
+            _run_integral_mix_supervisor_handoff_worker(
+                stop_event=supervisor_handoff_worker_stop,
+                service=supervisor_service,
+                runtime_settings_service=runtime_settings_service,
+            ),
+            name="integral-mix-supervisor-handoff-worker",
+        )
         if isinstance(idempotency_store, InMemoryMessageIdempotencyStore):
             LOGGER.warning(
                 "pipefacil.webhook.idempotency_memory_store",
@@ -340,6 +423,8 @@ def create_app(*, app_env: str | None = None) -> FastAPI:
         try:
             yield
         finally:
+            supervisor_handoff_worker_stop.set()
+            await supervisor_handoff_worker
             runtime.close()
             flush_langfuse(runtime_settings_service.get_execution_settings())
             LOGGER.info("Application shutdown completed.")

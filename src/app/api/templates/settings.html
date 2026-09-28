@@ -12,6 +12,10 @@
         <p class="eyebrow">SDR</p>
         <h1>Configurações</h1>
         <p>Alterações salvas valem para a próxima mensagem.</p>
+        <nav class="page-nav" aria-label="Navegação administrativa">
+          <a href="/settings" aria-current="page">Configurações</a>
+          <a href="/supervisores">Supervisores</a>
+        </nav>
       </div>
       <form action="/settings/logout" method="post">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

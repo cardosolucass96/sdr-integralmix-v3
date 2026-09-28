@@ -9,6 +9,7 @@ from langchain_core.prompts.chat import MessagesPlaceholder
 
 from app.agent.prompts import (
     CLASSIFIER_PROMPT_NAME,
+    INTEGRAL_MIX_INTERPRETER_PROMPT_NAME,
     OUTBOUND_MEDIA_CLASSIFIER_PROMPT_NAME,
     RESPONDER_PROMPT_NAME,
     WHATSAPP_STYLE_PROMPT_NAME,
@@ -175,16 +176,17 @@ def test_outbound_media_classifier_prompt_defines_safe_send_policy() -> None:
     assert "Never invent an ID, URL, filename, or file content" in system_prompt
 
 
-def test_responder_prompt_defines_hybrid_text_and_audio_policy() -> None:
+def test_integral_mix_responder_prompt_defines_raquel_voice_and_text_default() -> None:
     definitions = {definition.name: definition for definition in get_prompt_definitions()}
     responder_prompt = definitions[RESPONDER_PROMPT_NAME].prompt
 
     assert isinstance(responder_prompt, list)
     system_prompt = responder_prompt[0]["content"]
-    assert "text, generated audio, or both" in system_prompt
-    assert "copyable information in response_text" in system_prompt
-    assert "use a hybrid reply" in system_prompt
-    assert "never choose audio only because the reply is long" in system_prompt
+    assert RESPONDER_PROMPT_NAME == "integral-mix/responder-v2"
+    assert "Você é Raquel, consultora de nutrição animal da Integral Mix" in system_prompt
+    assert "amigável, profissional, acolhedora, objetiva e natural" in system_prompt
+    assert "cada bloco pode virar uma bolha" in system_prompt
+    assert "Use text by default" in system_prompt
     assert "Do not repeat the same content in both formats" in system_prompt
 
 
@@ -194,11 +196,12 @@ def test_responder_prompt_defines_consultative_conversation_contract() -> None:
 
     assert isinstance(responder_prompt, list)
     system_prompt = responder_prompt[0]["content"]
-    assert "consultative responder node" in system_prompt
-    assert "do not ask again for facts the user already provided" in system_prompt
-    assert "Address the current question, objection, correction, or refusal" in system_prompt
-    assert "one purposeful, preferably open question" in system_prompt
-    assert "Do not force a call to action" in system_prompt
+    assert "pergunte somente o próximo dado obrigatório" in system_prompt
+    assert "pergunte de novo algo que já foi respondido" in system_prompt
+    assert "trate isso primeiro e depois retome a qualificação" in system_prompt
+    assert "no máximo uma pergunta principal por mensagem" in system_prompt
+    assert "O código decide quais campos obrigatórios faltam" in system_prompt
+    assert "known_facts e pending_goal como a fonte atual" in system_prompt
 
 
 def test_responder_prompt_defines_truthful_and_respectful_sales_boundaries() -> None:
@@ -207,10 +210,23 @@ def test_responder_prompt_defines_truthful_and_respectful_sales_boundaries() -> 
 
     assert isinstance(responder_prompt, list)
     system_prompt = responder_prompt[0]["content"]
-    assert "Do not dump features or make a generic sales pitch" in system_prompt
-    assert "Never invent prices, discounts, terms, results" in system_prompt
-    assert "Respect a refusal or opt-out immediately" in system_prompt
-    assert "Never be defensive or manipulative" in system_prompt
+    assert "não informe, estime, negocie nem invente" in system_prompt
+    assert "Nunca mencione pedido mínimo" in system_prompt
+    assert "Respeite imediatamente pedido para parar" in system_prompt
+    assert "não invente produtos, benefícios" in system_prompt
+
+
+def test_integral_mix_prompt_preserves_approved_non_sales_contacts() -> None:
+    definitions = {definition.name: definition for definition in get_prompt_definitions()}
+    responder_prompt = definitions[RESPONDER_PROMPT_NAME].prompt
+
+    assert isinstance(responder_prompt, list)
+    system_prompt = responder_prompt[0]["content"]
+    assert "maria.ximenes@integralagro.com.br" in system_prompt
+    assert "(85) 99162-7588" in system_prompt
+    assert "tania@reginaalimentos.com.br" in system_prompt
+    assert "não acrescente pergunta de qualificação" in system_prompt
+    assert "Não afirme que abriu ou encaminhou uma solicitação técnica" in system_prompt
 
 
 def test_whatsapp_style_prompt_is_defined_as_text_prompt() -> None:
@@ -219,6 +235,7 @@ def test_whatsapp_style_prompt_is_defined_as_text_prompt() -> None:
     assert definitions[WHATSAPP_STYLE_PROMPT_NAME].type == "text"
     assert "WhatsApp" in definitions[WHATSAPP_STYLE_PROMPT_NAME].prompt
     assert definitions[CLASSIFIER_PROMPT_NAME].type == "chat"
+    assert definitions[INTEGRAL_MIX_INTERPRETER_PROMPT_NAME].type == "chat"
     assert definitions[OUTBOUND_MEDIA_CLASSIFIER_PROMPT_NAME].type == "chat"
     assert definitions[RESPONDER_PROMPT_NAME].type == "chat"
 

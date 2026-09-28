@@ -1,3 +1,4 @@
+from app.agent.chains.integral_mix_interpretation import build_integral_mix_interpreter_chain
 from app.agent.chains.intent import build_classifier_chain
 from app.agent.chains.llm import (
     effective_reasoning_effort,
@@ -10,9 +11,11 @@ from app.agent.chains.media import build_outbound_media_classifier_chain
 from app.agent.chains.response import build_responder_chain
 from app.agent.chains.schemas import (
     AgentResponsePlan,
+    IntegralMixTurnInterpretation,
     IntentClassification,
     OutboundMediaChoice,
     OutboundMediaClassification,
+    SupervisorHandoffProposal,
 )
 from app.agent.chains.temperature import (
     build_chain,
@@ -22,11 +25,14 @@ from app.agent.chains.temperature import (
 
 __all__ = [
     "IntentClassification",
+    "IntegralMixTurnInterpretation",
     "AgentResponsePlan",
     "OutboundMediaChoice",
     "OutboundMediaClassification",
+    "SupervisorHandoffProposal",
     "build_chain",
     "build_classifier_chain",
+    "build_integral_mix_interpreter_chain",
     "build_outbound_media_classifier_chain",
     "build_responder_chain",
     "get_chat_model",

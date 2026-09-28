@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
-from app.agent import ThreadStateResetError, reset_thread_state
+from app.agent import ThreadStateResetError, reset_thread_state, update_thread_state
 from app.application.chat import fetch_thread_state, run_chat_turn
 from app.application.delivery import build_response_parts
 from app.application.dto import ChatTurnResult, ResponsePartResult
@@ -15,6 +15,8 @@ from app.application.idempotency import (
     InMemoryMessageIdempotencyStore,
     MessageIdempotencyStore,
 )
+from app.application.integral_mix_handoff import execute_integral_mix_supervisor_handoff
+from app.application.supervisores import IntegralMixSupervisorService
 from app.application.token_budget import (
     LeadTokenUsage,
     build_lead_token_usage,
@@ -22,6 +24,7 @@ from app.application.token_budget import (
 )
 from app.application.whatsapp import split_whatsapp_messages
 from app.core.config import Settings
+from app.core.integral_mix_supervisors import NoEligibleSupervisorError
 from app.integrations.pipefacil import (
     InboundMediaDownload,
     MessageReceivedEventRequest,
@@ -116,6 +119,7 @@ def handle_pipefacil_message_received(
     graph=None,
     settings: Settings,
     idempotency_store: MessageIdempotencyStore | None = None,
+    supervisor_service: IntegralMixSupervisorService | None = None,
 ) -> ChatTurnResult:
     source_payloads = payload.messages_for_processing()
     latest_payload = source_payloads[-1]
@@ -188,6 +192,7 @@ def handle_pipefacil_message_received(
             graph=graph,
             settings=settings,
             session_id=session_id,
+            supervisor_service=supervisor_service,
             trace_user_id=trace_user_id,
             log_user_id=log_user_id,
             log_context=log_context,
@@ -248,6 +253,7 @@ def _handle_pipefacil_message_received_once(
     graph,
     settings: Settings,
     session_id: str,
+    supervisor_service: IntegralMixSupervisorService | None,
     trace_user_id: str,
     log_user_id: str,
     log_context: dict[str, object],
@@ -426,6 +432,12 @@ def _handle_pipefacil_message_received_once(
                 metadata=trace_metadata,
                 graph=graph,
                 settings=settings,
+                integral_mix_handoff_action=_build_integral_mix_handoff_action(
+                    payload,
+                    supervisor_service=supervisor_service,
+                    settings=settings,
+                    log_context=log_context,
+                ),
             )
             LOGGER.info(
                 "agent.run.completed",
@@ -447,9 +459,13 @@ def _handle_pipefacil_message_received_once(
                     "response_part_count": len(response.response_parts),
                 },
             )
-            delivered_response = _send_pipefacil_response(
+            delivered_response = _handle_agent_response_delivery(
                 payload,
                 response=response,
+                graph=graph,
+                session_id=session_id,
+                supervisor_service=supervisor_service,
+                log_context=log_context,
                 user_id=log_user_id,
                 settings=settings,
             )
@@ -463,6 +479,214 @@ def _handle_pipefacil_message_received_once(
                     }
                 )
             return delivered_response
+
+
+def _build_integral_mix_handoff_action(
+    payload: MessageReceivedEventRequest,
+    *,
+    supervisor_service: IntegralMixSupervisorService | None,
+    settings: Settings,
+    log_context: dict[str, object],
+) -> Callable[[dict[str, object]], dict[str, object]]:
+    def execute(request: dict[str, object]) -> dict[str, object]:
+        deal = payload.data.deal
+        if supervisor_service is None or deal is None or deal.seq is None:
+            return {
+                "handled": True,
+                "status": "supervisor_handoff_pending",
+                "handoff_delivery_status": "pending",
+            }
+
+        try:
+            result = execute_integral_mix_supervisor_handoff(
+                service=supervisor_service,
+                request=request,
+                deal_seq=deal.seq,
+                lead_phone=payload.data.contact.phone,
+                channel_id=payload.data.channel.id,
+                sender_phone_number_id=payload.data.channel.phoneNumberId,
+                settings=settings,
+            )
+        except NoEligibleSupervisorError as exc:
+            LOGGER.error(
+                "integral_mix.supervisor_handoff_unavailable",
+                extra={
+                    **log_context,
+                    "pipeline_step": "integral_mix.supervisor_handoff_unavailable",
+                    "deal_seq": deal.seq,
+                    "error_code": "no_eligible_supervisor",
+                    "error_detail": str(exc),
+                },
+            )
+            return {
+                "handled": True,
+                "status": "supervisor_handoff_unavailable",
+            }
+
+        status = (
+            "supervisor_handoff_delivered"
+            if result.delivery_status == "delivered"
+            else "supervisor_handoff_pending"
+        )
+        assignment = result.assignment
+        LOGGER.info(
+            "integral_mix.supervisor_handoff_completed",
+            extra={
+                **log_context,
+                "pipeline_step": "integral_mix.supervisor_handoff_completed",
+                "deal_seq": deal.seq,
+                "supervisor_id": assignment.supervisor.supervisor_id,
+                "match_mode": assignment.match_mode,
+                "handoff_delivery_status": result.delivery_status,
+            },
+        )
+        return {
+            "handled": True,
+            "status": status,
+            "handoff_delivery_status": result.delivery_status,
+            "supervisor_assignment": {
+                "deal_seq": deal.seq,
+                "supervisor_id": assignment.supervisor.supervisor_id,
+                "supervisor_name": assignment.supervisor.name,
+            },
+        }
+
+    return execute
+
+
+def _handle_agent_response_delivery(
+    payload: MessageReceivedEventRequest,
+    *,
+    response: ChatTurnResult,
+    graph: Any,
+    session_id: str,
+    supervisor_service: IntegralMixSupervisorService | None,
+    log_context: dict[str, object],
+    user_id: str,
+    settings: Settings,
+) -> ChatTurnResult:
+    if response.status == "supervisor_handoff_delivered":
+        return response
+    if response.status in {
+        "supervisor_handoff_pending",
+        "supervisor_handoff_unavailable",
+    }:
+        if not response.response_text.strip():
+            return response
+        return _send_pipefacil_response(
+            payload,
+            response=response,
+            user_id=user_id,
+            settings=settings,
+        )
+
+    handoff_request = response.supervisor_handoff_request
+    if handoff_request is None:
+        return _send_pipefacil_response(
+            payload,
+            response=response,
+            user_id=user_id,
+            settings=settings,
+        )
+
+    deal = payload.data.deal
+    if supervisor_service is None or deal is None or deal.seq is None:
+        LOGGER.error(
+            "integral_mix.supervisor_handoff_unavailable",
+            extra={
+                **log_context,
+                "pipeline_step": "integral_mix.supervisor_handoff_unavailable",
+                "error_code": (
+                    "supervisor_service_unavailable"
+                    if supervisor_service is None
+                    else "pipefacil_deal_seq_missing"
+                ),
+            },
+        )
+        return replace(
+            response,
+            response_text="",
+            response_messages=[],
+            response_parts=[],
+            status="supervisor_handoff_pending",
+        )
+
+    def persist_assignment(assignment) -> None:
+        try:
+            update_thread_state(
+                session_id,
+                {
+                    "supervisor_assignment": {
+                        "deal_seq": deal.seq,
+                        "supervisor_id": assignment.supervisor.supervisor_id,
+                        "supervisor_name": assignment.supervisor.name,
+                    }
+                },
+                graph=graph,
+            )
+        except Exception:
+            LOGGER.exception(
+                "integral_mix.supervisor_assignment_checkpoint_failed",
+                extra={
+                    **log_context,
+                    "pipeline_step": "integral_mix.supervisor_assignment_checkpoint_failed",
+                    "deal_seq": deal.seq,
+                },
+            )
+
+    try:
+        result = execute_integral_mix_supervisor_handoff(
+            service=supervisor_service,
+            request=handoff_request,
+            deal_seq=deal.seq,
+            lead_phone=payload.data.contact.phone,
+            channel_id=payload.data.channel.id,
+            sender_phone_number_id=payload.data.channel.phoneNumberId,
+            settings=settings,
+            on_assignment=persist_assignment,
+        )
+    except NoEligibleSupervisorError as exc:
+        LOGGER.error(
+            "integral_mix.supervisor_handoff_unavailable",
+            extra={
+                **log_context,
+                "pipeline_step": "integral_mix.supervisor_handoff_unavailable",
+                "deal_seq": deal.seq,
+                "error_code": "no_eligible_supervisor",
+                "error_detail": str(exc),
+            },
+        )
+        return replace(
+            response,
+            response_text="",
+            response_messages=[],
+            response_parts=[],
+            status="supervisor_handoff_unavailable",
+        )
+
+    delivery_status = (
+        "supervisor_handoff_delivered"
+        if result.delivery_status == "delivered"
+        else "supervisor_handoff_pending"
+    )
+    LOGGER.info(
+        "integral_mix.supervisor_handoff_completed",
+        extra={
+            **log_context,
+            "pipeline_step": "integral_mix.supervisor_handoff_completed",
+            "deal_seq": deal.seq,
+            "supervisor_id": result.assignment.supervisor.supervisor_id,
+            "match_mode": result.assignment.match_mode,
+            "handoff_delivery_status": result.delivery_status,
+        },
+    )
+    return replace(
+        response,
+        response_text="",
+        response_messages=[],
+        response_parts=[],
+        status=delivery_status,
+    )
 
 
 def _ignore_pipefacil_contact_without_lead(

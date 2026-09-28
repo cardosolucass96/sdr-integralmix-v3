@@ -4,7 +4,12 @@ import pytest
 from langchain_core.messages import AIMessage
 
 import app.application.chat as chat_application
+import app.application.integral_mix_handoff as handoff_application
 import app.application.pipefacil as pipefacil_application
+from app.agent.nodes.supervisor_handoff import (
+    HANDOFF_PENDING_RESPONSE,
+    HANDOFF_UNAVAILABLE_RESPONSE,
+)
 from app.application.dto import (
     ChatTurnResult,
     ResponseAudioResult,
@@ -14,10 +19,16 @@ from app.application.dto import (
 )
 from app.application.generated_audio import GeneratedAudioAsset, GeneratedAudioError
 from app.application.idempotency import InMemoryMessageIdempotencyStore
+from app.application.supervisores import (
+    InMemoryIntegralMixSupervisorStore,
+    IntegralMixSupervisorService,
+)
 from app.core.config import Settings, get_settings
+from app.core.integral_mix_supervisors import SupervisorFields
 from app.integrations.pipefacil import (
     MessageReceivedEventRequest,
     NormalizedInboundMessage,
+    PipefacilDealUpdateResult,
     PipefacilMediaProcessingError,
     PipefacilSendMessageError,
     PipefacilSendMessageResult,
@@ -2121,3 +2132,356 @@ def test_fetch_thread_state_returns_serialized_result(monkeypatch: pytest.Monkey
             )
         ],
     )
+
+
+def test_supervisor_handoff_updates_pipefacil_notifies_both_parties_and_checkpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = IntegralMixSupervisorService(InMemoryIntegralMixSupervisorStore())
+    service.create_supervisor(
+        SupervisorFields(
+            name="Ana Supervisor",
+            phone="+5585900000000",
+            category="AGRO",
+            region="CE",
+            leads_received=2,
+            is_active=True,
+            minimum_order=None,
+        )
+    )
+    crm_updates: list[dict[str, object]] = []
+    outbound_messages: list[dict[str, object]] = []
+    checkpoint_updates: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        handoff_application,
+        "update_deal_properties",
+        lambda **kwargs: (
+            crm_updates.append(kwargs)
+            or PipefacilDealUpdateResult(
+                status_code=200,
+                request_id="request-crm",
+                payload={"data": {"seq": kwargs["seq"]}},
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        handoff_application,
+        "fetch_deal_by_seq",
+        lambda **_: {"pipelineId": "pipeline-1", "stageId": "stage-ai", "notes": None},
+    )
+    monkeypatch.setattr(
+        handoff_application,
+        "fetch_pipefacil_pipelines",
+        lambda **_: [
+            {
+                "id": "pipeline-1",
+                "name": "Novos Leads",
+                "stages": [
+                    {"id": "stage-ai", "name": "Atendimento IA", "order": 1},
+                    {
+                        "id": "stage-handoff",
+                        "name": "Enviado para o comercial",
+                        "order": 3,
+                    },
+                ],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        handoff_application,
+        "send_public_text_message",
+        lambda **kwargs: (
+            outbound_messages.append(kwargs)
+            or PipefacilSendMessageResult(
+                status_code=201,
+                request_id=f"request-message-{len(outbound_messages)}",
+                payload={"data": {"id": f"message-{len(outbound_messages)}"}},
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        pipefacil_application,
+        "update_thread_state",
+        lambda thread_id, values, *, graph: checkpoint_updates.append((thread_id, values)),
+    )
+    response = ChatTurnResult(
+        thread_id="deal-example-001",
+        intent="request",
+        intent_reason="Lead qualificado.",
+        response_text="",
+        status="supervisor_handoff_ready",
+        supervisor_handoff_request={
+            "name": "Maria",
+            "document": "12345678901",
+            "activity": "criador",
+            "city": "Fortaleza",
+            "state": "Ceará",
+            "species": "Peixes",
+            "frequency": "Mensal",
+            "consumption": "300 kg por mês",
+            "store_name": None,
+            "works_with_nutrition": None,
+            "product_category": None,
+            "monthly_volume": None,
+            "current_brands": None,
+            "route_categories": ["AGRO"],
+        },
+    )
+
+    result = pipefacil_application._handle_agent_response_delivery(
+        _message_received_payload(),
+        response=response,
+        graph=object(),
+        session_id="deal-example-001",
+        supervisor_service=service,
+        log_context={"pipefacil_deal_seq": 100},
+        user_id="contact-example-001",
+        settings=Settings(
+            _env_file=None,
+            pipefacil_api_key="test-key",
+            pipefacil_base_url="https://api.pipefacil.test",
+        ),
+    )
+
+    assert result.status == "supervisor_handoff_delivered"
+    assert result.response_text == ""
+    assert crm_updates[0]["seq"] == 100
+    assert crm_updates[0]["properties"] == {
+        "cidade": "Fortaleza",
+        "estado": "CE",
+        "area_atuacao": "criador",
+        "supervisor": "Ana Supervisor",
+        "documento": "12345678901",
+        "especies": "Peixes",
+        "consumo": "300 kg por mês",
+        "frequencia_de_compra": ["Mensal"],
+    }
+    assert crm_updates[0]["stage_id"] == "stage-handoff"
+    assert crm_updates[0]["notes"] is None
+    assert [message["to"] for message in outbound_messages] == [
+        "+5585900000000",
+        "+55 (11) 00000-0001",
+    ]
+    assert "Prontinho" in outbound_messages[1]["text"]
+    assert all(message["channel_id"] == "channel-example-001" for message in outbound_messages)
+    assert checkpoint_updates[0][0] == "deal-example-001"
+    assert checkpoint_updates[0][1]["supervisor_assignment"]["deal_seq"] == 100
+
+
+@pytest.mark.parametrize(
+    ("status", "message"),
+    [
+        ("supervisor_handoff_pending", HANDOFF_PENDING_RESPONSE),
+        ("supervisor_handoff_unavailable", HANDOFF_UNAVAILABLE_RESPONSE),
+    ],
+)
+def test_pending_or_unavailable_handoff_fallback_is_sent_to_the_lead(
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+    message: str,
+) -> None:
+    sent: list[tuple[object, str]] = []
+
+    def send(payload, *, response, user_id, settings):
+        del user_id, settings
+        sent.append((payload, response.response_text))
+        return response
+
+    monkeypatch.setattr(pipefacil_application, "_send_pipefacil_response", send)
+    response = ChatTurnResult(
+        thread_id="deal-example-001",
+        intent="request",
+        intent_reason="Handoff não concluído.",
+        response_text=message,
+        status=status,
+    )
+
+    result = pipefacil_application._handle_agent_response_delivery(
+        _message_received_payload(),
+        response=response,
+        graph=object(),
+        session_id="deal-example-001",
+        supervisor_service=None,
+        log_context={},
+        user_id="contact-example-001",
+        settings=Settings(_env_file=None),
+    )
+
+    assert result.status == status
+    assert sent == [(_message_received_payload(), message)]
+
+
+def test_supervisor_handoff_fails_closed_when_runtime_service_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pipefacil_application,
+        "_send_pipefacil_response",
+        lambda *args, **kwargs: pytest.fail("handoff request must not become a generic reply"),
+    )
+    response = ChatTurnResult(
+        thread_id="deal-example-001",
+        intent="request",
+        intent_reason="Lead qualificado.",
+        response_text="",
+        status="supervisor_handoff_ready",
+        supervisor_handoff_request={"state": "CE"},
+    )
+
+    result = pipefacil_application._handle_agent_response_delivery(
+        _message_received_payload(),
+        response=response,
+        graph=object(),
+        session_id="deal-example-001",
+        supervisor_service=None,
+        log_context={},
+        user_id="contact-example-001",
+        settings=Settings(_env_file=None),
+    )
+
+    assert result.status == "supervisor_handoff_pending"
+    assert result.response_text == ""
+
+
+def test_supervisor_handoff_is_unavailable_without_regional_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pipefacil_application,
+        "_send_pipefacil_response",
+        lambda *args, **kwargs: pytest.fail("unroutable handoff must not become a generic reply"),
+    )
+    response = ChatTurnResult(
+        thread_id="deal-example-001",
+        intent="request",
+        intent_reason="Lead qualificado.",
+        response_text="",
+        status="supervisor_handoff_ready",
+        supervisor_handoff_request={"state": "CE", "route_categories": ["AGRO"]},
+    )
+    service = IntegralMixSupervisorService(InMemoryIntegralMixSupervisorStore())
+
+    result = pipefacil_application._handle_agent_response_delivery(
+        _message_received_payload(),
+        response=response,
+        graph=object(),
+        session_id="deal-example-001",
+        supervisor_service=service,
+        log_context={},
+        user_id="contact-example-001",
+        settings=Settings(_env_file=None),
+    )
+
+    assert result.status == "supervisor_handoff_unavailable"
+
+
+def test_supervisor_handoff_waits_when_pipefacil_deal_sequence_is_missing() -> None:
+    response = ChatTurnResult(
+        thread_id="deal-example-001",
+        intent="request",
+        intent_reason="Lead qualificado.",
+        response_text="",
+        status="supervisor_handoff_ready",
+        supervisor_handoff_request={"state": "CE"},
+    )
+    service = IntegralMixSupervisorService(InMemoryIntegralMixSupervisorStore())
+
+    result = pipefacil_application._handle_agent_response_delivery(
+        _message_received_payload_with_deal_extra({"seq": None}),
+        response=response,
+        graph=object(),
+        session_id="deal-example-001",
+        supervisor_service=service,
+        log_context={},
+        user_id="contact-example-001",
+        settings=Settings(_env_file=None),
+    )
+
+    assert result.status == "supervisor_handoff_pending"
+
+
+def test_supervisor_handoff_delivers_even_if_checkpoint_update_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = IntegralMixSupervisorService(InMemoryIntegralMixSupervisorStore())
+    service.create_supervisor(
+        SupervisorFields("Ana Supervisor", "+5585900000000", "AGRO", "CE", 0, True, None)
+    )
+    monkeypatch.setattr(
+        pipefacil_application,
+        "update_thread_state",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("checkpoint unavailable")),
+    )
+    monkeypatch.setattr(
+        handoff_application,
+        "update_deal_properties",
+        lambda **_: PipefacilDealUpdateResult(200, "crm-request", {"data": {"seq": 100}}),
+    )
+    monkeypatch.setattr(
+        handoff_application,
+        "fetch_deal_by_seq",
+        lambda **_: {"pipelineId": "pipeline-1", "stageId": "stage-ai", "notes": None},
+    )
+    monkeypatch.setattr(
+        handoff_application,
+        "fetch_pipefacil_pipelines",
+        lambda **_: [
+            {
+                "id": "pipeline-1",
+                "name": "Novos Leads",
+                "stages": [
+                    {"id": "stage-ai", "name": "Atendimento IA", "order": 1},
+                    {
+                        "id": "stage-handoff",
+                        "name": "Enviado para o comercial",
+                        "order": 3,
+                    },
+                ],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        handoff_application,
+        "send_public_text_message",
+        lambda **_: PipefacilSendMessageResult(201, "message-request", {"data": {"id": "m1"}}),
+    )
+    response = ChatTurnResult(
+        thread_id="deal-example-001",
+        intent="request",
+        intent_reason="Lead qualificado.",
+        response_text="",
+        status="supervisor_handoff_ready",
+        supervisor_handoff_request={
+            "name": "Maria",
+            "document": "12345678901",
+            "activity": "criador",
+            "city": "Fortaleza",
+            "state": "CE",
+            "species": "Peixes",
+            "frequency": "Mensal",
+            "consumption": "300 kg por mês",
+            "store_name": None,
+            "works_with_nutrition": None,
+            "product_category": None,
+            "monthly_volume": None,
+            "current_brands": None,
+            "route_categories": ["AGRO"],
+        },
+    )
+
+    result = pipefacil_application._handle_agent_response_delivery(
+        _message_received_payload(),
+        response=response,
+        graph=object(),
+        session_id="deal-example-001",
+        supervisor_service=service,
+        log_context={},
+        user_id="contact-example-001",
+        settings=Settings(
+            _env_file=None,
+            pipefacil_api_key="test-key",
+            pipefacil_base_url="https://api.pipefacil.test",
+        ),
+    )
+
+    assert result.status == "supervisor_handoff_delivered"

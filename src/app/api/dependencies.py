@@ -6,6 +6,7 @@ from fastapi import Request
 
 from app.application.idempotency import MessageIdempotencyStore
 from app.application.runtime_settings import RuntimeSettingsService
+from app.application.supervisores import IntegralMixSupervisorService
 from app.core.config import Settings
 from app.core.logging import configure_logging
 
@@ -26,3 +27,7 @@ def get_runtime_settings_service(request: Request) -> RuntimeSettingsService:
 
 def get_pipefacil_message_idempotency_store(request: Request) -> MessageIdempotencyStore:
     return request.app.state.pipefacil_message_idempotency_store
+
+
+def get_integral_mix_supervisor_service(request: Request) -> IntegralMixSupervisorService:
+    return request.app.state.integral_mix_supervisor_service

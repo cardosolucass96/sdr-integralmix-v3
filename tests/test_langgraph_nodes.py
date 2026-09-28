@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableLambda
 from openai import BadRequestError
 
+import app.agent.chains.integral_mix_interpretation as interpretation_chains
 import app.agent.chains.intent as intent_chains
 import app.agent.chains.llm as llm_chains
 import app.agent.chains.media as media_chains
@@ -19,6 +20,7 @@ from app.agent.chains.schemas import (
     GeneratedAudioChoice,
     IntentClassification,
     OpenAIAgentResponsePlan,
+    OpenAIIntegralMixTurnInterpretation,
     OpenAIIntentClassification,
     OpenAIOutboundMediaClassification,
     OutboundMediaChoice,
@@ -26,11 +28,46 @@ from app.agent.chains.schemas import (
 )
 from app.agent.context import AgentRunContext
 from app.agent.messages import has_sensitive_multimodal_content, message_to_text, serialize_messages
+from app.agent.nodes.supervisor_handoff import (
+    HANDOFF_PENDING_RESPONSE,
+    HANDOFF_UNAVAILABLE_RESPONSE,
+    execute_supervisor_handoff,
+)
 from app.agent.specialists import SpecialistResult
 from app.core.config import RuntimeSettings, get_settings
 from app.outbound_media import OUTBOUND_MEDIA_CATALOG_UNAVAILABLE_TEXT, OutboundMediaAsset
 
 delegate_nodes = importlib.import_module("app.agent.nodes.delegate_specialist")
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_response"),
+    [
+        ("supervisor_handoff_pending", HANDOFF_PENDING_RESPONSE),
+        ("supervisor_handoff_unavailable", HANDOFF_UNAVAILABLE_RESPONSE),
+    ],
+)
+def test_supervisor_handoff_action_returns_truthful_lead_message(
+    status: str,
+    expected_response: str,
+) -> None:
+    action_context = AgentRunContext(
+        settings=RuntimeSettings(),
+        integral_mix_handoff_action=lambda _: {
+            "handled": True,
+            "status": status,
+            "handoff_delivery_status": "pending",
+        },
+    )
+
+    result = execute_supervisor_handoff(
+        {"supervisor_handoff_request": {"state": "CE"}},
+        SimpleNamespace(context=action_context),
+    )
+
+    assert result["status"] == status
+    assert result["response_text"] == expected_response
+    assert result["messages"][0].content == expected_response
 
 
 @pytest.fixture(autouse=True)
@@ -150,7 +187,7 @@ def test_respond_appends_ai_message(monkeypatch) -> None:
         def invoke(self, payload, config=None):
             assert payload["intent"] == "request"
             assert payload["latest_user_message"] == "Me ajuda com isso."
-            assert payload["conversation_history"] == [input_message]
+            assert payload["conversation_history"][-1] is input_message
             assert payload["specialist_result"] is None
             assert payload["specialist_context"] == "No specialist result."
             assert payload["response_style"] == "Use WhatsApp style."
@@ -214,7 +251,7 @@ def test_respond_accepts_structured_response_without_media(monkeypatch) -> None:
     class FakeResponderChain:
         def invoke(self, payload, config=None):
             assert payload["available_media"] == OUTBOUND_MEDIA_CATALOG_UNAVAILABLE_TEXT
-            assert payload["conversation_history"] == [input_message]
+            assert payload["conversation_history"][-1] is input_message
             return AgentResponsePlan(response_text="Oi! Posso ajudar?", media_choices=[])
 
     monkeypatch.setattr(response_nodes, "_build_responder_chain", lambda: FakeResponderChain())
@@ -224,13 +261,43 @@ def test_respond_accepts_structured_response_without_media(monkeypatch) -> None:
             "messages": [input_message],
             "latest_user_message": "Oi",
             "intent": "greeting",
+            "supervisor_handoff_request": {"old": "proposal"},
         }
     )
 
     assert result["response_text"] == "Oi! Posso ajudar?"
     assert result["response_media"] == []
+    assert result["supervisor_handoff_request"] is None
     assert isinstance(result["messages"][0], AIMessage)
     assert result["messages"][0].content == "Oi! Posso ajudar?"
+
+
+def test_respond_receives_interpreted_qualification_context(monkeypatch) -> None:
+    class FakeResponderChain:
+        def invoke(self, payload, config=None):
+            assert payload["known_facts"] == '{"name":"Maria"}'
+            assert payload["pending_goal"] == "document"
+            assert '"is_question":true' in payload["turn_interpretation"]
+            return AgentResponsePlan(
+                response_text="Qual é seu CPF ou CNPJ?",
+            )
+
+    monkeypatch.setattr(response_nodes, "_build_responder_chain", lambda: FakeResponderChain())
+
+    result = response_nodes.respond(
+        {
+            "messages": [HumanMessage(content="Tenho uma criação de peixes.")],
+            "latest_user_message": "Tenho uma criação de peixes.",
+            "intent": "request",
+            "known_facts": {"name": "Maria"},
+            "pending_goal": "document",
+            "last_interpretation": {"is_question": True},
+        }
+    )
+
+    assert result["status"] == "responded"
+    assert result["response_text"] == "Qual é seu CPF ou CNPJ?"
+    assert result["supervisor_handoff_request"] is None
 
 
 def test_respond_accepts_generated_audio_plan(monkeypatch) -> None:
@@ -935,7 +1002,7 @@ def test_respond_retries_without_temperature(monkeypatch) -> None:
 
         def invoke(self, payload, config=None):
             calls.append(self.should_fail)
-            assert payload["conversation_history"] == [input_message]
+            assert payload["conversation_history"][-1] is input_message
             assert config == {"callbacks": ["trace"]}
             if self.should_fail:
                 raise _unsupported_temperature_error()
@@ -1013,7 +1080,7 @@ def test_respond_retries_with_text_only_history_when_file_block_is_rejected(monk
     )
 
     assert len(calls) == 2
-    assert calls[0] == [input_message]
+    assert calls[0][-1] is input_message
     assert result["response_text"] == "Recebi o arquivo, mas preciso do conteudo em texto."
 
 
@@ -1369,6 +1436,7 @@ def test_gpt56_reasoning_uses_compatible_temperature_and_effort(monkeypatch) -> 
 
 
 def test_gpt56_reasoning_uses_json_schema_for_structured_chains(monkeypatch) -> None:
+    interpretation_calls = []
     classifier_calls = []
     media_classifier_calls = []
     responder_calls = []
@@ -1381,6 +1449,11 @@ def test_gpt56_reasoning_uses_json_schema_for_structured_chains(monkeypatch) -> 
             self.calls.append((schema, method))
             return RunnableLambda(lambda value: value)
 
+    monkeypatch.setattr(
+        interpretation_chains,
+        "get_chat_model",
+        lambda **kwargs: FakeChatOpenAI(interpretation_calls),
+    )
     monkeypatch.setattr(
         intent_chains,
         "get_chat_model",
@@ -1398,10 +1471,12 @@ def test_gpt56_reasoning_uses_json_schema_for_structured_chains(monkeypatch) -> 
     )
 
     settings = RuntimeSettings(openai_model="gpt-5.6-luna", openai_reasoning_effort="medium")
+    interpretation_chains.build_integral_mix_interpreter_chain(settings)
     intent_chains.build_classifier_chain(settings)
     media_chains.build_outbound_media_classifier_chain(settings)
     response_chains.build_responder_chain(settings)
 
+    assert interpretation_calls == [(OpenAIIntegralMixTurnInterpretation, "json_schema")]
     assert classifier_calls == [(OpenAIIntentClassification, "json_schema")]
     assert media_classifier_calls == [(OpenAIOutboundMediaClassification, "json_schema")]
     assert responder_calls == [(OpenAIAgentResponsePlan, "json_schema")]

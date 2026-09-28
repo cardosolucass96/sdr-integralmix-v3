@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Supervisores · SDR</title>
+    <link rel="stylesheet" href="/settings/static/settings.css">
+  </head>
+  <body>
+    <header class="settings-header supervisors-header">
+      <div>
+        <p class="eyebrow">INTEGRALMIX · SDR</p>
+        <h1>Supervisores</h1>
+        <p>Cadastros e distribuição são mantidos no Postgres do SDR.</p>
+        <nav class="page-nav" aria-label="Navegação administrativa">
+          <a href="/supervisores" aria-current="page">Supervisores</a>
+          <a href="/settings">Configurações</a>
+        </nav>
+      </div>
+      <form action="/settings/logout" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="secondary" type="submit">Sair</button>
+      </form>
+    </header>
+    <main class="settings-content supervisors-content">
+      {% if notice %}<p class="notice success" role="status">{{ notice }}</p>{% endif %}
+      {% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
+
+      <section class="supervisor-stats" aria-label="Resumo dos supervisores">
+        <article><span>Cadastros</span><strong>{{ supervisors|length }}</strong></article>
+        <article><span>Ativos</span><strong>{{ active_count }}</strong></article>
+        <article><span>Inativos</span><strong>{{ inactive_count }}</strong></article>
+        <article><span>Leads distribuídos</span><strong>{{ lead_count }}</strong></article>
+      </section>
+
+      {% if uncovered_states %}
+      <p class="notice error" role="alert">
+        <strong>Sem cobertura ativa:</strong> {{ uncovered_states|join(', ') }}.
+        Leads dessas UFs não serão encaminhados até que um supervisor ativo cubra a região.
+      </p>
+      {% endif %}
+
+      <details class="settings-section" open>
+        <summary>Adicionar supervisor</summary>
+        <form class="supervisor-create-form" action="/supervisores" method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label class="field" for="new-name">
+            <span>Nome</span>
+            <input id="new-name" name="name" required maxlength="180" autocomplete="name">
+          </label>
+          <label class="field" for="new-phone">
+            <span>Telefone</span>
+            <input id="new-phone" name="phone" maxlength="40" autocomplete="tel">
+          </label>
+          <label class="field" for="new-category">
+            <span>Categoria</span>
+            <input id="new-category" name="category" required maxlength="240" placeholder="AGRO, PECUARIAS">
+          </label>
+          <label class="field" for="new-region">
+            <span>Região / UFs</span>
+            <input id="new-region" name="region" required maxlength="180" placeholder="CE/RN ou Sudeste">
+          </label>
+          <label class="field" for="new-minimum-order">
+            <span>Pedido mínimo</span>
+            <input id="new-minimum-order" name="minimum_order" maxlength="240">
+          </label>
+          <label class="field" for="new-leads">
+            <span>Leads recebidos</span>
+            <input id="new-leads" name="leads_received" type="number" min="0" step="1" value="0" required>
+          </label>
+          <label class="field supervisor-active-field" for="new-active">
+            <input id="new-active" name="is_active" type="checkbox" value="true" checked>
+            <span>Ativo</span>
+          </label>
+          <div class="supervisor-form-action"><button type="submit">Cadastrar</button></div>
+        </form>
+      </details>
+
+      <section class="settings-section supervisor-list-section">
+        <div class="supervisor-list-heading">
+          <div>
+            <h2>Lista de supervisores</h2>
+            <p>Desative quem não deve receber novos leads. O histórico de distribuição fica preservado.</p>
+          </div>
+          <span class="source-badge">Banco local</span>
+        </div>
+        <div class="supervisor-table-wrap">
+          <table class="supervisor-table">
+            <thead>
+              <tr>
+                <th scope="col">Supervisor</th>
+                <th scope="col">Telefone</th>
+                <th scope="col">Categoria</th>
+                <th scope="col">Região</th>
+                <th scope="col">Pedido mínimo</th>
+                <th scope="col">Leads</th>
+                <th scope="col">Ativo</th>
+                <th scope="col"><span class="sr-only">Ação</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for supervisor in supervisors %}
+              {% set form_id = 'supervisor-' ~ supervisor.supervisor_id %}
+              <tr>
+                <td>
+                  <form id="{{ form_id }}" action="/supervisores/{{ supervisor.supervisor_id }}" method="post">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  </form>
+                  <label class="sr-only" for="name-{{ supervisor.supervisor_id }}">Nome do supervisor</label>
+                  <input id="name-{{ supervisor.supervisor_id }}" form="{{ form_id }}" name="name" value="{{ supervisor.name }}" required maxlength="180">
+                  <small class="source-id">{% if supervisor.nocodb_record_id %}NocoDB #{{ supervisor.nocodb_record_id }}{% else %}Cadastro local{% endif %}</small>
+                </td>
+                <td>
+                  <label class="sr-only" for="phone-{{ supervisor.supervisor_id }}">Telefone</label>
+                  <input id="phone-{{ supervisor.supervisor_id }}" form="{{ form_id }}" name="phone" value="{{ supervisor.phone or '' }}" maxlength="40">
+                </td>
+                <td>
+                  <label class="sr-only" for="category-{{ supervisor.supervisor_id }}">Categoria</label>
+                  <input id="category-{{ supervisor.supervisor_id }}" form="{{ form_id }}" name="category" value="{{ supervisor.category }}" required maxlength="240">
+                </td>
+                <td>
+                  <label class="sr-only" for="region-{{ supervisor.supervisor_id }}">Região</label>
+                  <input id="region-{{ supervisor.supervisor_id }}" form="{{ form_id }}" name="region" value="{{ supervisor.region }}" required maxlength="180">
+                </td>
+                <td>
+                  <label class="sr-only" for="minimum-order-{{ supervisor.supervisor_id }}">Pedido mínimo</label>
+                  <input id="minimum-order-{{ supervisor.supervisor_id }}" form="{{ form_id }}" name="minimum_order" value="{{ supervisor.minimum_order or '' }}" maxlength="240">
+                </td>
+                <td>
+                  <label class="sr-only" for="leads-{{ supervisor.supervisor_id }}">Leads recebidos</label>
+                  <input id="leads-{{ supervisor.supervisor_id }}" form="{{ form_id }}" name="leads_received" type="number" min="0" step="1" value="{{ supervisor.leads_received }}" required>
+                </td>
+                <td>
+                  <label class="toggle-label" for="active-{{ supervisor.supervisor_id }}">
+                    <input id="active-{{ supervisor.supervisor_id }}" form="{{ form_id }}" name="is_active" type="checkbox" value="true" {% if supervisor.is_active %}checked{% endif %}>
+                    <span>{{ 'Sim' if supervisor.is_active else 'Não' }}</span>
+                  </label>
+                </td>
+                <td><button form="{{ form_id }}" type="submit">Salvar</button></td>
+              </tr>
+              {% else %}
+              <tr><td class="empty-state" colspan="8">Nenhum supervisor cadastrado.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

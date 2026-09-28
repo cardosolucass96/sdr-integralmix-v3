@@ -6,7 +6,9 @@ state and are therefore never checkpointed with the lead conversation.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from langgraph.runtime import Runtime
 
@@ -21,6 +23,7 @@ from app.core.config import (
 @dataclass(frozen=True, slots=True)
 class AgentRunContext:
     settings: RuntimeSettings
+    integral_mix_handoff_action: Callable[[dict[str, Any]], dict[str, Any]] | None = None
 
 
 def default_agent_run_context() -> AgentRunContext:

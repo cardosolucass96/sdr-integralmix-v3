@@ -48,24 +48,29 @@ Monta o `StateGraph`, registra nodes e edges e compila o grafo. Os callbacks Lan
 injetados por `run_agent()` em `src/app/agent/service.py`, conforme o tipo de conteudo da
 execucao.
 
-O fluxo principal continua:
+O fluxo do SDR Integral Mix agora separa interpretação, regra de qualificação e resposta:
 
 ```text
-START -> classify-intent -> respond -> END
+START -> interpret-turn -> update-qualification -> respond -> END
 ```
 
-O grafo tambem tem um caminho condicional para trabalho interno mais complexo:
+Se a qualificação terminou, o routing puro envia o pedido estruturado imediatamente ao node
+`supervisor-handoff-action`. Ele chama a porta de ação injetada pelo runtime; a camada
+`application` reserva o supervisor, grava a operação durável no outbox e executa o handoff. Se a
+interpretação pedir análise especialista, o fluxo passa pelo node especialista antes de atualizar
+os fatos:
 
 ```text
-START -> classify-intent -> delegate-specialist -> respond -> END
+START -> interpret-turn -> update-qualification -> supervisor-handoff-action -> END
+                    └-> delegate-specialist -> update-qualification -> respond
 ```
 
-O classificador decide se a rodada precisa de especialista, o node executa o OpenAI Agents
-SDK atras de feature flag e o responder mantem a mensagem final.
-
-Este fluxo minimo nao tenta representar toda conversa comercial. Em agentes derivados, a IA
-deve interpretar linguagem em campos estruturados e o grafo deve rotear sobre esses campos,
-conforme [`modelagem-conversacional.md`](modelagem-conversacional.md).
+`interpret-turn` usa structured output nativo para intenção, atos conversacionais e fatos novos
+ou corrigidos. `update-qualification` mescla os fatos com a origem, calcula o próximo campo
+pendente e aplica a completude determinística. `respond` recebe esses campos e não decide se
+deve ocorrer handoff. O node de ação não importa Pipefacil nem persiste contexto comercial; ele
+delega à aplicação via contexto por execução. O node especialista executa o OpenAI Agents SDK
+atrás de feature flag e retorna trabalho estruturado.
 
 ### `src/app/agent/routing.py`
 

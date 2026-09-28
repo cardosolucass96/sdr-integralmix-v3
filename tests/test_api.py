@@ -11,7 +11,7 @@ from fastapi import BackgroundTasks, HTTPException, Response
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
-import app.agent.nodes.intent as intent_nodes
+import app.agent.interpretation as interpretation_service
 import app.agent.nodes.response as response_nodes
 import app.api.request_body as request_body_module
 import app.api.routes.chat as chat_routes
@@ -158,7 +158,11 @@ def test_chat_endpoint_returns_response(monkeypatch: pytest.MonkeyPatch) -> None
             assert config["configurable"]["thread_id"] == "thread-1"
             return AIMessage(content="Oi! Como posso ajudar?")
 
-    monkeypatch.setattr(intent_nodes, "_build_classifier_chain", lambda: FakeClassifierChain())
+    monkeypatch.setattr(
+        interpretation_service,
+        "_build_interpreter_chain",
+        lambda: FakeClassifierChain(),
+    )
     monkeypatch.setattr(response_nodes, "_build_responder_chain", lambda: FakeResponderChain())
 
     with TestClient(create_app()) as client:
@@ -209,7 +213,7 @@ def test_resume_conversation_reads_history_and_uses_resume_context(
 
     class FakeClassifierChain:
         def invoke(self, payload, config=None):
-            captured["classifier_message"] = payload["latest_user_message"]
+            captured["interpreter_message"] = payload["latest_user_message"]
             return IntentClassification(intent="request", reason="Retomada comercial.")
 
     class FakeResponderChain:
@@ -218,7 +222,11 @@ def test_resume_conversation_reads_history_and_uses_resume_context(
             captured["resume_context"] = payload["resume_context"]
             return AIMessage(content="Oi! Conseguiu concluir o pagamento no cartao?")
 
-    monkeypatch.setattr(intent_nodes, "_build_classifier_chain", lambda: FakeClassifierChain())
+    monkeypatch.setattr(
+        interpretation_service,
+        "_build_interpreter_chain",
+        lambda: FakeClassifierChain(),
+    )
     monkeypatch.setattr(response_nodes, "_build_responder_chain", lambda: FakeResponderChain())
 
     with TestClient(create_app()) as client:
@@ -240,11 +248,14 @@ def test_resume_conversation_reads_history_and_uses_resume_context(
     assert response.status_code == 200
     assert response.json()["history_message_count"] == 2
     assert response.json()["response_text"] == "Oi! Conseguiu concluir o pagamento no cartao?"
-    assert captured["classifier_message"] == "Vou passar o cartao."
+    assert captured["interpreter_message"] == "Vou passar o cartao."
     assert captured["resume_context"] == (
         "Faz 3 dias que ele nao responde e ficou de passar o cartao."
     )
-    assert [message.content for message in captured["history"][0:2]] == [
+    conversational_messages = [
+        message for message in captured["history"] if message.type in {"human", "ai"}
+    ]
+    assert [message.content for message in conversational_messages] == [
         "Vou passar o cartao.",
         "Perfeito, fico no aguardo.",
     ]
@@ -333,7 +344,11 @@ def test_chat_persists_history_for_same_thread(monkeypatch: pytest.MonkeyPatch) 
             latest_user_message = payload["latest_user_message"]
             return AIMessage(content=f"Resposta para: {latest_user_message}")
 
-    monkeypatch.setattr(intent_nodes, "_build_classifier_chain", lambda: FakeClassifierChain())
+    monkeypatch.setattr(
+        interpretation_service,
+        "_build_interpreter_chain",
+        lambda: FakeClassifierChain(),
+    )
     monkeypatch.setattr(response_nodes, "_build_responder_chain", lambda: FakeResponderChain())
 
     with TestClient(create_app()) as client:
@@ -368,7 +383,11 @@ def test_chat_does_not_trigger_pipefacil_outbound(monkeypatch: pytest.MonkeyPatc
         def invoke(self, payload, config=None):
             return AIMessage(content="Resposta sem webhook.")
 
-    monkeypatch.setattr(intent_nodes, "_build_classifier_chain", lambda: FakeClassifierChain())
+    monkeypatch.setattr(
+        interpretation_service,
+        "_build_interpreter_chain",
+        lambda: FakeClassifierChain(),
+    )
     monkeypatch.setattr(response_nodes, "_build_responder_chain", lambda: FakeResponderChain())
     monkeypatch.setattr(
         pipefacil_application,
@@ -394,7 +413,11 @@ def test_threads_are_isolated(monkeypatch: pytest.MonkeyPatch) -> None:
         def invoke(self, payload, config=None):
             return AIMessage(content=f"Echo: {payload['latest_user_message']}")
 
-    monkeypatch.setattr(intent_nodes, "_build_classifier_chain", lambda: FakeClassifierChain())
+    monkeypatch.setattr(
+        interpretation_service,
+        "_build_interpreter_chain",
+        lambda: FakeClassifierChain(),
+    )
     monkeypatch.setattr(response_nodes, "_build_responder_chain", lambda: FakeResponderChain())
 
     with TestClient(create_app()) as client:
@@ -678,11 +701,14 @@ def test_message_received_route_acknowledges_and_processes_in_background(
     monkeypatch.setenv("LANGFUSE_ENABLED", "false")
     captured: dict[str, object] = {}
 
-    def fake_handle_message_received(payload, *, graph, settings, idempotency_store):
+    def fake_handle_message_received(
+        payload, *, graph, settings, idempotency_store, supervisor_service
+    ):
         captured["payload"] = payload
         captured["graph"] = graph
         captured["settings"] = settings
         captured["idempotency_store"] = idempotency_store
+        captured["supervisor_service"] = supervisor_service
         return ChatTurnResult(
             thread_id="deal-example-001",
             intent="greeting",
@@ -717,6 +743,7 @@ def test_message_received_route_acknowledges_and_processes_in_background(
     assert captured["graph"] is not None
     assert captured["settings"] is not None
     assert isinstance(captured["idempotency_store"], InMemoryMessageIdempotencyStore)
+    assert captured["supervisor_service"] is not None
 
 
 def test_message_received_enqueues_processing_without_running_it_inline(
@@ -736,6 +763,7 @@ def test_message_received_enqueues_processing_without_running_it_inline(
         graph=object(),
         settings=Settings(_env_file=None),
         idempotency_store=InMemoryMessageIdempotencyStore(),
+        supervisor_service=None,
         response=Response(),
     )
 
@@ -812,7 +840,10 @@ def test_message_received_route_accepts_flattened_pipefacil_message_payload(
     message = payload["data"].pop("message")
     payload["data"].update(message)
 
-    def fake_handle_message_received(payload, *, graph, settings, idempotency_store):
+    def fake_handle_message_received(
+        payload, *, graph, settings, idempotency_store, supervisor_service
+    ):
+        del supervisor_service
         captured["payload"] = payload
         return ChatTurnResult(
             thread_id="deal-example-001",
@@ -846,7 +877,10 @@ def test_message_received_accepts_valid_webhook_signature(
     monkeypatch.setenv("PIPEFACIL_WEBHOOK_SIGNATURE_SECRET", secret)
     captured: dict[str, object] = {}
 
-    def fake_handle_message_received(payload, *, graph, settings, idempotency_store):
+    def fake_handle_message_received(
+        payload, *, graph, settings, idempotency_store, supervisor_service
+    ):
+        del supervisor_service
         captured["payload"] = payload
         return ChatTurnResult(
             thread_id="deal-example-001",
@@ -900,6 +934,7 @@ def test_message_received_logs_raw_payload_when_enabled(
         graph=object(),
         settings=Settings(_env_file=None, log_inbound_payloads=True),
         idempotency_store=InMemoryMessageIdempotencyStore(),
+        supervisor_service=None,
         response=Response(),
     )
 
@@ -948,6 +983,7 @@ def test_message_received_logs_sanitized_raw_media_payload_when_enabled(
         graph=object(),
         settings=Settings(_env_file=None, log_inbound_payloads=True),
         idempotency_store=InMemoryMessageIdempotencyStore(),
+        supervisor_service=None,
         response=Response(),
     )
 
@@ -991,6 +1027,7 @@ def test_message_received_does_not_log_raw_payload_by_default(
         graph=object(),
         settings=Settings(_env_file=None, log_inbound_payloads=False),
         idempotency_store=InMemoryMessageIdempotencyStore(),
+        supervisor_service=None,
         response=Response(),
     )
 
@@ -1031,6 +1068,7 @@ def test_message_received_logs_media_summary_when_media_is_received(
         graph=object(),
         settings=Settings(_env_file=None, log_inbound_payloads=False),
         idempotency_store=InMemoryMessageIdempotencyStore(),
+        supervisor_service=None,
         response=Response(),
     )
 
@@ -1096,6 +1134,7 @@ def test_message_received_accepts_multimodal_payloads_and_logs_safe_summary(
         graph=object(),
         settings=Settings(_env_file=None, log_inbound_payloads=True),
         idempotency_store=InMemoryMessageIdempotencyStore(),
+        supervisor_service=None,
         response=Response(),
     )
 
@@ -1129,7 +1168,10 @@ def test_message_received_accepts_gzip_encoded_multimodal_payload(
     monkeypatch.setattr(request_body_module, "LOGGER", fake_main_logger)
     captured: dict[str, object] = {}
 
-    def fake_handle_message_received(payload, *, graph, settings, idempotency_store):
+    def fake_handle_message_received(
+        payload, *, graph, settings, idempotency_store, supervisor_service
+    ):
+        del supervisor_service
         captured["payload"] = payload
         return ChatTurnResult(
             thread_id="deal-example-001",
@@ -1201,6 +1243,7 @@ def test_message_received_logs_inbound_rejection_without_raw_payload(
             graph=object(),
             settings=Settings(_env_file=None, log_inbound_payloads=False),
             idempotency_store=InMemoryMessageIdempotencyStore(),
+            supervisor_service=None,
             response=Response(),
         )
 
@@ -1264,7 +1307,11 @@ def test_message_received_keeps_acknowledgement_when_background_delivery_fails(
         def invoke(self, payload, config=None):
             return AIMessage(content="Oi! Recebi sua mensagem.")
 
-    monkeypatch.setattr(intent_nodes, "_build_classifier_chain", lambda: FakeClassifierChain())
+    monkeypatch.setattr(
+        interpretation_service,
+        "_build_interpreter_chain",
+        lambda: FakeClassifierChain(),
+    )
     monkeypatch.setattr(response_nodes, "_build_responder_chain", lambda: FakeResponderChain())
     monkeypatch.setattr(
         pipefacil_application,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from inspect import Parameter, signature
 from typing import Any
 from uuid import uuid4
@@ -120,6 +120,20 @@ def get_thread_state(
     return None if _snapshot_is_missing(snapshot) else snapshot
 
 
+def update_thread_state(
+    thread_id: str,
+    values: dict[str, Any],
+    *,
+    graph: Any | None = None,
+) -> None:
+    """Persist application-owned facts in the checkpoint for a conversation."""
+
+    _resolve_graph(graph).update_state(
+        _thread_config(thread_id),
+        values,
+    )
+
+
 class ThreadStateResetError(RuntimeError):
     """Raised when the configured graph cannot delete a thread checkpoint."""
 
@@ -183,6 +197,7 @@ def run_agent(
     graph: Any | None = None,
     replace_messages: bool = False,
     settings: Settings | None = None,
+    integral_mix_handoff_action: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> AgentState:
     execution_settings = settings or build_execution_settings(
         get_bootstrap_settings(), RuntimeSettings()
@@ -219,7 +234,8 @@ def run_agent(
                 graph_input,
                 config=runnable_config or None,
                 context=AgentRunContext(
-                    settings=runtime_settings_from_execution(execution_settings)
+                    settings=runtime_settings_from_execution(execution_settings),
+                    integral_mix_handoff_action=integral_mix_handoff_action,
                 ),
             )
             if observation is not None:

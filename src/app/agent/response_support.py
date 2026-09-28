@@ -120,22 +120,16 @@ def _conversation_history_with_delivery_context(
     safe_media_context = available_media.strip()
     if not safe_media_context or safe_media_context == OUTBOUND_MEDIA_CATALOG_UNAVAILABLE_TEXT:
         return messages
-    return [
-        SystemMessage(
-            content=(
-                "Delivery capability for this turn:\n"
-                "You can select outbound media from the catalog by returning media_choices "
-                "in the structured response. The application will send selected media after "
-                "your text reply.\n"
-                "If the user asks for an audio, image, video, or document and a catalog item "
-                "matches, choose that media_id. Do not say you cannot send media when a "
-                "matching catalog item is available.\n"
-                "Use only media_id values listed here. Never invent URLs, filenames, or raw "
-                f"file content.\nAvailable outbound media:\n{safe_media_context}"
-            )
-        ),
-        *messages,
-    ]
+    context_message = SystemMessage(
+        content=(
+            "Delivery capability for this turn:\n"
+            "Select media only from the catalog using media_choices. The application "
+            "sends it after the text reply. Do not say you cannot send media when a safe "
+            "catalog item is available. Do not invent URLs or filenames.\n"
+            f"Available outbound media:\n{safe_media_context}"
+        )
+    )
+    return [context_message, *messages]
 
 
 def _validate_media_choices(
@@ -212,6 +206,112 @@ def _invoke_responder_with_file_fallback(
     return invoke_with_temperature_fallback(chain_factory, retry_payload, config=config)
 
 
+def _generate_response_plan(
+    agent_state: Mapping[str, Any],
+    latest_message: str,
+    *,
+    config: RunnableConfig | None,
+    chain_factory: Callable[..., Any],
+    response_style: str,
+    available_media: str,
+) -> Any:
+    conversation_history = _conversation_history_with_delivery_context(
+        list(agent_state.get("messages", [])),
+        available_media=available_media,
+    )
+    specialist_result = agent_state.get("specialist_result")
+    response = _invoke_responder_with_file_fallback(
+        {
+            "intent": agent_state.get("intent", "fallback"),
+            "latest_user_message": latest_message,
+            "known_facts": json.dumps(
+                agent_state.get("known_facts") or {},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            "pending_goal": agent_state.get("pending_goal") or "none",
+            "turn_interpretation": json.dumps(
+                agent_state.get("last_interpretation") or {},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            "conversation_history": conversation_history,
+            "specialist_result": specialist_result,
+            "specialist_context": json.dumps(
+                specialist_result or {},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            if specialist_result
+            else "No specialist result.",
+            "resume_context": str(agent_state.get("resume_context") or "").strip()
+            or "No additional resume context.",
+            "response_style": response_style,
+            "available_media": available_media,
+        },
+        config=config,
+        chain_factory=chain_factory,
+    )
+    return response
+
+
+def _select_response_media(
+    response_plan: AgentResponsePlan,
+    agent_state: Mapping[str, Any],
+    latest_message: str,
+    available_media: str,
+    *,
+    config: RunnableConfig | None,
+    media_selection_chain_factory: Callable[..., Any],
+    media_by_id_loader: Callable[[], Mapping[str, Any]],
+    logger: Any,
+) -> list[dict[str, Any]]:
+    response_media = _validate_media_choices(
+        response_plan.media_choices,
+        media_by_id_loader=media_by_id_loader,
+        logger=logger,
+    )
+    if response_media:
+        return response_media
+
+    inferred_media = infer_catalog_media_choice(
+        latest_message,
+        list(agent_state.get("messages", [])),
+        available_media,
+        config=config,
+        chain_factory=media_selection_chain_factory,
+        media_by_id_loader=media_by_id_loader,
+        logger=logger,
+    )
+    if inferred_media is None:
+        return []
+
+    logger.info(
+        "agent.outbound_media.inferred",
+        extra={
+            "pipeline_step": "agent.outbound_media.inferred",
+            "media_id": inferred_media.media_id,
+            "reason": inferred_media.reason,
+        },
+    )
+    return _validate_media_choices(
+        [inferred_media],
+        media_by_id_loader=media_by_id_loader,
+        logger=logger,
+    )
+
+
+def _response_audio(
+    response_plan: AgentResponsePlan,
+    response_media: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if any(media.get("type") == "audio" for media in response_media):
+        return None
+    if response_plan.generated_audio is None:
+        return None
+    return response_plan.generated_audio.model_dump()
+
+
 def build_response_update(
     agent_state: Mapping[str, Any],
     *,
@@ -231,70 +331,29 @@ def build_response_update(
             "response_text": response_text,
             "response_media": [],
             "messages": [AIMessage(content=response_text)],
+            "supervisor_handoff_request": None,
             "status": "responded",
         }
-    conversation_history = _conversation_history_with_delivery_context(
-        list(agent_state.get("messages", [])),
-        available_media=available_media,
-    )
-    response = _invoke_responder_with_file_fallback(
-        {
-            "intent": agent_state.get("intent", "fallback"),
-            "latest_user_message": latest_message,
-            "conversation_history": conversation_history,
-            "specialist_result": agent_state.get("specialist_result"),
-            "specialist_context": json.dumps(
-                agent_state.get("specialist_result") or {},
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-            if agent_state.get("specialist_result")
-            else "No specialist result.",
-            "resume_context": str(agent_state.get("resume_context") or "").strip()
-            or "No additional resume context.",
-            "response_style": response_style,
-            "available_media": available_media,
-        },
+    response = _generate_response_plan(
+        agent_state,
+        latest_message,
         config=config,
         chain_factory=chain_factory,
+        response_style=response_style,
+        available_media=available_media,
     )
     response_plan = _response_to_plan(response)
-    response_media = _validate_media_choices(
-        response_plan.media_choices,
+    response_media = _select_response_media(
+        response_plan,
+        agent_state,
+        latest_message,
+        available_media,
+        config=config,
+        media_selection_chain_factory=media_selection_chain_factory,
         media_by_id_loader=media_by_id_loader,
         logger=logger,
     )
-    if not response_media:
-        inferred_media = infer_catalog_media_choice(
-            latest_message,
-            list(agent_state.get("messages", [])),
-            available_media,
-            config=config,
-            chain_factory=media_selection_chain_factory,
-            media_by_id_loader=media_by_id_loader,
-            logger=logger,
-        )
-        if inferred_media is not None:
-            response_media = _validate_media_choices(
-                [inferred_media],
-                media_by_id_loader=media_by_id_loader,
-                logger=logger,
-            )
-            logger.info(
-                "agent.outbound_media.inferred",
-                extra={
-                    "pipeline_step": "agent.outbound_media.inferred",
-                    "media_id": inferred_media.media_id,
-                    "reason": inferred_media.reason,
-                },
-            )
-    response_audio = None
-    if not any(media.get("type") == "audio" for media in response_media):
-        response_audio = (
-            response_plan.generated_audio.model_dump()
-            if response_plan.generated_audio is not None
-            else None
-        )
+    response_audio = _response_audio(response_plan, response_media)
     response_text = response_plan.response_text
     response_message = (
         response if isinstance(response, BaseMessage) else AIMessage(content=response_text)
@@ -305,6 +364,7 @@ def build_response_update(
         "response_media": response_media,
         "response_audio": response_audio,
         "messages": [response_message],
+        "supervisor_handoff_request": None,
         "status": "responded",
     }
 

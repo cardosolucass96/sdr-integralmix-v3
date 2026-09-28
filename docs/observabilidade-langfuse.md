@@ -212,7 +212,8 @@ Prefira:
 - `run-{app_slug}`;
 - `handle-pipefacil-turn`;
 - `generate-elevenlabs-speech`;
-- `classify-intent`;
+- `interpret-turn`;
+- `update-qualification`;
 - `respond`;
 - `send-pipefacil-message`;
 - `retrieve-lead-context`.
@@ -222,15 +223,18 @@ Prefira:
 Prompts canonicos deste template:
 
 - `agent/classifier`;
-- `agent/responder`;
+- `integral-mix/turn-interpreter-v2`;
+- `integral-mix/responder-v2`;
 - `agent/style/whatsapp`.
 
 O fallback local existe para manter testes e desenvolvimento funcionando quando Langfuse
 nao esta configurado. O fallback nao substitui o fluxo de versionamento em ambientes reais.
 `agent/style/whatsapp` e um prompt `text`: ele nao representa uma conversa completa, e sim
-um guia reutilizavel injetado no prompt `agent/responder` pela variavel `response_style`.
-O prompt `agent/responder` tambem recebe `available_media`, uma visao segura do catalogo de
+um guia reutilizavel injetado no prompt `integral-mix/responder-v2` pela variavel `response_style`.
+O prompt `integral-mix/responder-v2` tambem recebe `available_media`, uma visao segura do catalogo de
 midias outbound sem `media_url`, arquivos brutos ou URLs assinadas.
+`integral-mix/turn-interpreter-v2` recebe o historico serializado e os fatos ja confirmados; seu
+schema inclui interpretacao semantica e somente as alteracoes de fatos do turno atual.
 
 O responder base e consultivo e contextual, mas continua sem regras, oferta ou alegacoes de
 um cliente. `agent/style/whatsapp` concentra coesao, naturalidade, adaptacao de voz e a regra

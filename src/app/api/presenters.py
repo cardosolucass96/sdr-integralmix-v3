@@ -7,6 +7,7 @@ from app.application.dto import ChatTurnResult
 
 INTERNAL_CHAT_TURN_FIELDS = {
     "response_audio",
+    "supervisor_handoff_request",
 }
 
 

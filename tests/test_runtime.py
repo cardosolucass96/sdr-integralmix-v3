@@ -64,6 +64,27 @@ def test_reset_thread_state_deletes_all_checkpoints_for_thread() -> None:
     assert deleted_threads == ["thread-to-reset"]
 
 
+def test_update_thread_state_persists_application_owned_values() -> None:
+    calls: list[tuple[dict[str, object], dict[str, object]]] = []
+
+    class FakeGraph:
+        def update_state(self, config, values) -> None:
+            calls.append((config, values))
+
+    service.update_thread_state(
+        "deal-thread",
+        {"supervisor_assignment": {"deal_seq": 10}},
+        graph=FakeGraph(),
+    )
+
+    assert calls == [
+        (
+            {"configurable": {"thread_id": "deal-thread"}},
+            {"supervisor_assignment": {"deal_seq": 10}},
+        )
+    ]
+
+
 def test_postgres_database_config_normalizes_jdbc_url_and_schema() -> None:
     database_config = resolve_postgres_database_config(
         "jdbc:postgresql://192.0.2.10:5432/postgres",

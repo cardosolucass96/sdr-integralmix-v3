@@ -14,8 +14,9 @@ from app.integrations.pipefacil.conversation import (
     normalize_conversation_history,
 )
 
-PUBLIC_MESSAGES_PATH = "/api/v1/messages"
+PUBLIC_MESSAGES_PATH = "/api/v1/conversations/messages"
 PUBLIC_DEALS_PATH = "/api/v1/deals"
+PUBLIC_PIPELINES_PATH = "/api/v1/pipelines"
 MEDIA_DOWNLOAD_CHUNK_SIZE = 64 * 1024
 OUTBOUND_MEDIA_MESSAGE_TYPES = {"image", "video", "audio", "document"}
 
@@ -188,6 +189,57 @@ def fetch_deal_by_seq(
     return response_payload
 
 
+def fetch_pipefacil_pipelines(
+    *,
+    settings: Settings | None = None,
+    client: httpx.Client | None = None,
+) -> list[dict[str, Any]]:
+    current_settings = settings or get_settings()
+    if not current_settings.pipefacil_api_key:
+        raise PipefacilDealLookupError(
+            "PIPEFACIL_API_KEY is required to fetch Pipefacil pipelines.",
+            error_code="pipefacil_api_key_missing",
+        )
+
+    owns_client = client is None
+    current_client = client or _build_client(current_settings)
+    try:
+        response = current_client.get(
+            PUBLIC_PIPELINES_PATH,
+            headers=_build_headers(current_settings),
+        )
+    except httpx.HTTPError as exc:
+        raise PipefacilDealLookupError(
+            f"Pipefacil pipeline lookup request failed: {exc}",
+            error_code="pipefacil_transport_error",
+        ) from exc
+    finally:
+        if owns_client:
+            current_client.close()
+
+    response_payload = _safe_json(response)
+    request_id = response.headers.get("x-request-id")
+    if response.is_error:
+        raise PipefacilDealLookupError(
+            "Pipefacil pipeline lookup returned an error response.",
+            error_code="pipefacil_upstream_error",
+            status_code=response.status_code,
+            request_id=request_id,
+            response_body=response_payload,
+        )
+
+    pipelines = response_payload.get("data") if isinstance(response_payload, dict) else None
+    if not isinstance(pipelines, list) or any(not isinstance(item, dict) for item in pipelines):
+        raise PipefacilDealLookupError(
+            "Pipefacil pipeline lookup returned an invalid response.",
+            error_code="pipefacil_pipeline_response_invalid",
+            status_code=response.status_code,
+            request_id=request_id,
+            response_body=response_payload,
+        )
+    return pipelines
+
+
 def fetch_pipefacil_conversation_history(
     *,
     deal_seq: int | None = None,
@@ -276,6 +328,8 @@ def update_deal_properties(
     *,
     seq: int | None,
     properties: dict[str, Any],
+    stage_id: str | None = None,
+    notes: str | None = None,
     settings: Settings | None = None,
     client: httpx.Client | None = None,
 ) -> PipefacilDealUpdateResult:
@@ -298,13 +352,30 @@ def update_deal_properties(
             error_code="pipefacil_deal_properties_empty",
         )
 
+    update_payload: dict[str, Any] = {"customFields": properties}
+    if stage_id is not None:
+        normalized_stage_id = stage_id.strip()
+        if not normalized_stage_id:
+            raise PipefacilDealUpdateError(
+                "Pipefacil stage id is required when included in a deal update.",
+                error_code="pipefacil_stage_id_missing",
+            )
+        update_payload["stageId"] = normalized_stage_id
+    if notes is not None:
+        if len(notes) > 2000:
+            raise PipefacilDealUpdateError(
+                "Pipefacil deal notes cannot exceed 2000 characters.",
+                error_code="pipefacil_deal_notes_too_long",
+            )
+        update_payload["notes"] = notes
+
     owns_client = client is None
     current_client = client or _build_client(current_settings)
 
     try:
         response = current_client.patch(
             f"{PUBLIC_DEALS_PATH}/{seq}",
-            json={"customFields": properties},
+            json=update_payload,
             headers=_build_headers(current_settings),
         )
     except httpx.HTTPError as exc:
@@ -403,6 +474,7 @@ def send_public_text_message(
     *,
     to: str | None,
     text: str,
+    channel_id: str | None = None,
     sender_phone_number_id: str | None = None,
     profile_name: str | None = None,
     settings: Settings | None = None,
@@ -435,6 +507,8 @@ def send_public_text_message(
         "type": "text",
         "text": message_text,
     }
+    if channel_id:
+        payload["channelId"] = channel_id
     if sender_phone_number_id:
         payload["senderPhoneNumberId"] = sender_phone_number_id
     # Kept in the function signature for caller compatibility. Pipefacil'

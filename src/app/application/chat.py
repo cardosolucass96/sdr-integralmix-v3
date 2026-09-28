@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -29,6 +29,7 @@ def run_chat_turn(
     metadata: dict[str, object] | None = None,
     tags: tuple[str, ...] | None = None,
     settings: Settings | None = None,
+    integral_mix_handoff_action: Callable[[dict[str, object]], dict[str, object]] | None = None,
 ) -> ChatTurnResult:
     result = run_agent(
         {"messages": [HumanMessage(content=message)]},
@@ -39,6 +40,7 @@ def run_chat_turn(
         config={"configurable": {"thread_id": thread_id}},
         graph=graph,
         settings=settings,
+        integral_mix_handoff_action=integral_mix_handoff_action,
     )
     return _chat_turn_result(result, thread_id=thread_id)
 
@@ -88,6 +90,11 @@ def _chat_turn_result(result: dict[str, Any], *, thread_id: str) -> ChatTurnResu
         response_parts=build_response_parts(
             response_messages=response_messages,
             response_media=list(result.get("response_media") or []),
+        ),
+        supervisor_handoff_request=(
+            result.get("supervisor_handoff_request")
+            if isinstance(result.get("supervisor_handoff_request"), dict)
+            else None
         ),
         response_audio=response_audio,
     )

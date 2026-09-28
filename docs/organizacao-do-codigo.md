@@ -102,6 +102,8 @@ Subpastas:
   endpoint `GET /generated-audio/{filename}`, delegado para `application`.
 - [`settings.py`](../src/app/api/routes/settings.py):
   painel server-rendered em `/settings`, com login, sessao, CSRF e controle de versao.
+- [`supervisores.py`](../src/app/api/routes/supervisores.py):
+  painel server-rendered em `/supervisores` para manter o cadastro local de supervisores.
 
 #### `src/app/api/schemas/`
 
@@ -138,6 +140,8 @@ Arquivos principais:
   dataclasses de retorno para a camada HTTP.
 - [`runtime_settings.py`](../src/app/application/runtime_settings.py):
   caso de uso para snapshots da configuracao operacional por request.
+- [`supervisores.py`](../src/app/application/supervisores.py):
+  cadastro local, normalizacao regional e selecao idempotente de supervisor por lead.
 
 Quando usar esta pasta:
 
@@ -222,6 +226,11 @@ Infraestrutura de configuracao operacional:
 - [`postgres_runtime_settings.py`](../src/app/integrations/postgres_runtime_settings.py):
   persiste `sdr_runtime_settings` com versao otimista no pool e schema do runtime.
 
+Integracao de supervisores IntegralMix:
+
+- [`postgres_integral_mix_supervisors.py`](../src/app/integrations/postgres_integral_mix_supervisors.py):
+  persiste supervisores e reservas de distribuicao no Postgres do SDR.
+
 Integracao `elevenlabs/`:
 
 - [`client.py`](../src/app/integrations/elevenlabs/client.py):
@@ -249,6 +258,8 @@ Codigo transversal de configuracao.
   modelos tipados para segredos de bootstrap, configuracao operacional e view de execucao.
 - [`database.py`](../src/app/core/database.py):
   normalizacao e preparacao compartilhada de conexoes Postgres.
+- [`integral_mix_supervisors.py`](../src/app/core/integral_mix_supervisors.py):
+  entidades e contrato compartilhados entre o caso de uso de supervisores e o adaptador Postgres.
 - [`exceptions.py`](../src/app/core/exceptions.py):
   excecoes estaveis de configuracao do runtime.
 - [`logging.py`](../src/app/core/logging.py):

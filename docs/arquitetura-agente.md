@@ -13,26 +13,30 @@ estado, nodes, chains, routing, tools e prompts.
 Ele deve ser reutilizavel por diferentes agentes Pipefacil sem depender de detalhes do
 webhook, transporte HTTP externo ou contratos especificos de integracao.
 
-Fluxo atual:
+Fluxo atual do SDR Integral Mix:
 
 ```text
-START -> classify-intent -> respond -> END
+START -> interpret-turn -> update-qualification -> respond -> END
 ```
 
-Quando o classificador marca `requires_specialist=true`, o fluxo passa por um especialista
-interno antes do responder:
+Quando a interpretação marca `requires_specialist=true`, o fluxo passa pelo especialista antes
+da atualização da qualificação. Quando os campos obrigatórios ficam completos, o grafo roteia
+o pedido validado para `supervisor-handoff-action`. Esse node recebe uma ação por contexto de
+execução e delega para a camada application, que reserva a atribuição, cria a operação durável no
+outbox e processa o handoff ao Pipefacil antes de qualquer envio de resposta:
 
 ```text
-START -> classify-intent -> delegate-specialist -> respond -> END
+START -> interpret-turn -> update-qualification -> supervisor-handoff-action -> END
+                    └-> delegate-specialist -> update-qualification -> respond
 ```
 
-O especialista OpenAI Agents SDK nunca envia mensagem ao Pipefacil. Ele retorna trabalho
-estruturado para o `respond`, que continua montando a resposta final.
-
-O fluxo acima e somente o scaffold executavel da base. Ele nao deve ser copiado como o fluxo
-comercial completo de um SDR derivado. O contrato para expandi-lo, inclusive a fronteira entre
-nodes e a proibicao de parsing semantico, esta em
-[`derivacao-agente.md`](derivacao-agente.md).
+O `interpret-turn` retorna significado e fatos incrementais em schema tipado. O
+`update-qualification` mescla fatos, preserva fontes, calcula `pending_goal` e decide a
+completude com regra determinística. O `supervisor-handoff-action` chama apenas a porta de ação
+injetada no contexto, sem persistir credenciais ou dependências externas no estado. A aplicação
+é responsável por banco, outbox e integração Pipefacil. O `respond` usa o estado incompleto para
+responder à dúvida atual e perguntar somente o próximo campo. O especialista OpenAI Agents SDK
+retorna trabalho estruturado e nunca envia mensagem ao Pipefacil.
 
 ## Estrutura
 
@@ -75,6 +79,11 @@ houver uma responsabilidade coesa que decide uma regra, interpreta conversa, con
 produz um efeito externo ou precisa de retry, checkpoint, teste ou observabilidade propria.
 Nao fragmente mapeamentos triviais; tambem nao concentre varias dessas responsabilidades em
 um unico node.
+
+No SDR Integral Mix, `interpret-turn` e `update-qualification` mantêm separadas a inferência
+semântica e as regras de completude. Uma qualificação completa segue imediatamente para o node
+`supervisor-handoff-action`; o caso de uso da camada `application` cria e processa o handoff
+durável.
 
 ### `chains/`
 

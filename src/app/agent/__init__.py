@@ -1,5 +1,12 @@
 from app.agent.agent import build_graph, graph
-from app.agent.nodes import classify_intent, delegate_specialist, respond
+from app.agent.nodes import (
+    classify_intent,
+    delegate_specialist,
+    execute_supervisor_handoff,
+    interpret_turn,
+    respond,
+    update_qualification,
+)
 from app.agent.runtime import AgentGraphRuntime, bootstrap_postgres_checkpointer, build_runtime
 from app.agent.service import (
     ThreadStateResetError,
@@ -7,6 +14,7 @@ from app.agent.service import (
     reset_thread_state,
     run_agent,
     serialize_thread_state,
+    update_thread_state,
 )
 
 __all__ = [
@@ -16,11 +24,15 @@ __all__ = [
     "build_runtime",
     "classify_intent",
     "delegate_specialist",
+    "execute_supervisor_handoff",
+    "interpret_turn",
+    "update_qualification",
     "get_thread_state",
     "graph",
     "respond",
     "reset_thread_state",
     "run_agent",
     "serialize_thread_state",
+    "update_thread_state",
     "ThreadStateResetError",
 ]
