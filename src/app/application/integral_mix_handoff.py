@@ -45,6 +45,7 @@ NUTRITION_NOTE_MARKER = "[Integral Mix] Trabalha com nutrição animal:"
 class IntegralMixHandoffResult:
     assignment: SupervisorAssignment
     delivery_status: str
+    lead_message: str | None = None
 
 
 def supervisor_handoff_request_key(deal_seq: int) -> str:
@@ -103,6 +104,7 @@ def execute_integral_mix_supervisor_handoff(
     return IntegralMixHandoffResult(
         assignment,
         "delivered" if completed else "pending",
+        _lead_handoff_message(operations[0]) if completed else None,
     )
 
 
@@ -348,16 +350,7 @@ def _notify_lead(
     settings: Settings,
 ) -> dict[str, Any]:
     payload = operation.lead_payload
-    display_phone = _display_phone(operation)
-    contact_line = (
-        f"Se preferir, você pode falar diretamente com a equipe pelo telefone {display_phone}. "
-        if display_phone != "não cadastrado"
-        else "O time comercial pode dar continuidade ao seu atendimento. "
-    )
-    message = (
-        f"Já encaminhei seus dados para {operation.supervisor.name}, que atende sua região. "
-        f"{contact_line}A equipe também pode ajudar com produtos, preços, pagamento e frete."
-    )
+    message = _lead_handoff_message(operation)
     result = send_public_text_message(
         to=payload["lead_phone"],
         text=message,
@@ -365,7 +358,31 @@ def _notify_lead(
         sender_phone_number_id=payload["sender_phone_number_id"],
         settings=settings,
     )
+    LOGGER.info(
+        "integral_mix.supervisor_lead_notification_sent",
+        extra={
+            "pipeline_step": "integral_mix.supervisor_lead_notification_sent",
+            "deal_seq": operation.deal_seq,
+            "supervisor_id": operation.supervisor.supervisor_id,
+            "status_code": result.status_code,
+            "request_id": result.request_id,
+        },
+    )
     return _message_receipt(result.status_code, result.request_id, result.payload)
+
+
+def _lead_handoff_message(operation: SupervisorHandoffOperation) -> str:
+    phone = _display_phone(operation)
+    contact_line = (
+        f"Se quiser falar diretamente com o supervisor, o telefone é {phone}."
+        if phone != "não cadastrado"
+        else "No momento, não tenho um telefone direto cadastrado do supervisor."
+    )
+    return (
+        f"Pronto, já encaminhei seus dados para o supervisor responsável pela sua região. "
+        f"Ele vai direcionar seu atendimento a um vendedor, que entrará em contato com você. "
+        f"{contact_line}"
+    )
 
 
 def _supervisor_message(profile: dict[str, Any], *, lead_phone: str) -> str:

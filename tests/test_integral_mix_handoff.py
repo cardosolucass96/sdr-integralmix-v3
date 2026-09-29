@@ -186,6 +186,7 @@ def test_replayed_handoff_reports_delivered_without_resending_messages(
 
     assert replay.delivery_status == "delivered"
     assert replay.assignment.already_assigned is True
+    assert replay.lead_message is None
     assert outbound == ["+5585900000000", "+5585999999999"]
 
 

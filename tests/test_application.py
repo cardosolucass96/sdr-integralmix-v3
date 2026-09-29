@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from langchain_core.messages import AIMessage
 
@@ -2252,7 +2254,13 @@ def test_supervisor_handoff_updates_pipefacil_notifies_both_parties_and_checkpoi
     )
 
     assert result.status == "supervisor_handoff_delivered"
-    assert result.response_text == ""
+    assert result.delivery_status == "sent"
+    assert result.response_text == (
+        "Pronto, já encaminhei seus dados para o supervisor responsável pela sua região. "
+        "Ele vai direcionar seu atendimento a um vendedor, que entrará em contato com você. "
+        "Se quiser falar diretamente com o supervisor, o telefone é +5585900000000."
+    )
+    assert result.response_messages == [result.response_text]
     assert crm_updates[0]["seq"] == 100
     assert crm_updates[0]["properties"] == {
         "cidade": "Fortaleza",
@@ -2270,13 +2278,77 @@ def test_supervisor_handoff_updates_pipefacil_notifies_both_parties_and_checkpoi
         "+5585900000000",
         "+55 (11) 00000-0001",
     ]
-    assert "Já encaminhei seus dados" in outbound_messages[1]["text"]
+    assert outbound_messages[1]["text"] == result.response_text
+    assert "vendedor" in result.response_text
+    assert "entrará em contato" in result.response_text
+    assert "+5585900000000" in result.response_text
     assert "Prontinho" not in outbound_messages[1]["text"]
     assert all(message["channel_id"] == "channel-example-001" for message in outbound_messages)
     assert checkpoint_updates[0][0] == "deal-example-001"
     assert checkpoint_updates[0][1]["supervisor_assignment"]["deal_seq"] == 100
     assert checkpoint_updates[-1][1]["handoff_delivery_status"] == "delivered"
     assert checkpoint_updates[-1][1]["status"] == "supervisor_handoff_delivered"
+
+
+def test_integral_mix_graph_handoff_action_exposes_lead_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_message = "Pronto, encaminhei seus dados e um vendedor vai falar com você."
+    supervisor = SimpleNamespace(supervisor_id=13, name="Ana Supervisor")
+    assignment = SimpleNamespace(supervisor=supervisor, match_mode="region_only")
+    handoff_result = SimpleNamespace(
+        delivery_status="delivered",
+        assignment=assignment,
+        lead_message=expected_message,
+    )
+    monkeypatch.setattr(
+        pipefacil_application,
+        "execute_integral_mix_supervisor_handoff",
+        lambda **_: handoff_result,
+    )
+    action = pipefacil_application._build_integral_mix_handoff_action(
+        _message_received_payload(),
+        supervisor_service=object(),
+        settings=Settings(_env_file=None),
+        log_context={},
+    )
+
+    result = action({"state": "CE"})
+
+    assert result["status"] == "supervisor_handoff_delivered"
+    assert result["response_text"] == expected_message
+
+
+def test_completed_handoff_trace_text_is_not_sent_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = "Os dados já foram encaminhados."
+    response = ChatTurnResult(
+        thread_id="deal-example-001",
+        intent="request",
+        intent_reason="Handoff concluído.",
+        response_text=message,
+        status="supervisor_handoff_delivered",
+    )
+    monkeypatch.setattr(
+        pipefacil_application,
+        "_send_pipefacil_response",
+        lambda *args, **kwargs: pytest.fail("handoff confirmation must not be sent twice"),
+    )
+
+    result = pipefacil_application._handle_agent_response_delivery(
+        _message_received_payload(),
+        response=response,
+        graph=object(),
+        session_id="deal-example-001",
+        supervisor_service=None,
+        log_context={},
+        user_id="contact-example-001",
+        settings=Settings(_env_file=None),
+    )
+
+    assert result.response_text == message
+    assert result.delivery_status == "sent"
 
 
 @pytest.mark.parametrize(

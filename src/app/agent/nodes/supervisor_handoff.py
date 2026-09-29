@@ -52,8 +52,8 @@ def _handoff_state_update(result: dict[str, Any]) -> dict[str, Any]:
     delivery_status = result.get("handoff_delivery_status")
     if isinstance(delivery_status, str):
         update["handoff_delivery_status"] = delivery_status
-    response = _handoff_response(status)
-    if response:
+    response = _handoff_response(status) or result.get("response_text")
+    if isinstance(response, str) and response.strip():
         update["response_text"] = response
         update["messages"] = [AIMessage(content=response)]
     return update

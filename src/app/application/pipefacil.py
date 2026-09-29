@@ -545,6 +545,7 @@ def _build_integral_mix_handoff_action(
             "handled": True,
             "status": status,
             "handoff_delivery_status": result.delivery_status,
+            "response_text": result.lead_message or "",
             "supervisor_assignment": {
                 "deal_seq": deal.seq,
                 "supervisor_id": assignment.supervisor.supervisor_id,
@@ -567,7 +568,12 @@ def _handle_agent_response_delivery(
     settings: Settings,
 ) -> ChatTurnResult:
     if response.status == "supervisor_handoff_delivered":
-        return response
+        # The durable handoff action has already sent this response directly to the lead.
+        # Keep its text for the API result and Langfuse trace without sending it twice.
+        return replace(
+            response,
+            delivery_status="sent" if response.response_text.strip() else None,
+        )
     if response.status in {
         "supervisor_handoff_pending",
         "supervisor_handoff_unavailable",
@@ -689,12 +695,18 @@ def _handle_agent_response_delivery(
             "handoff_delivery_status": result.delivery_status,
         },
     )
+    lead_message = result.lead_message or ""
+    lead_messages = split_whatsapp_messages(lead_message)
     return replace(
         response,
-        response_text="",
-        response_messages=[],
-        response_parts=[],
+        response_text=lead_message,
+        response_messages=lead_messages,
+        response_parts=build_response_parts(
+            response_messages=lead_messages,
+            response_media=[],
+        ),
         status=delivery_status,
+        delivery_status="sent" if lead_message else None,
     )
 
 

@@ -45,6 +45,7 @@ delegate_nodes = importlib.import_module("app.agent.nodes.delegate_specialist")
     [
         ("supervisor_handoff_pending", HANDOFF_PENDING_RESPONSE),
         ("supervisor_handoff_unavailable", HANDOFF_UNAVAILABLE_RESPONSE),
+        ("supervisor_handoff_delivered", "Handoff enviado ao cliente."),
     ],
 )
 def test_supervisor_handoff_action_returns_truthful_lead_message(
@@ -56,7 +57,12 @@ def test_supervisor_handoff_action_returns_truthful_lead_message(
         integral_mix_handoff_action=lambda _: {
             "handled": True,
             "status": status,
-            "handoff_delivery_status": "pending",
+            "handoff_delivery_status": (
+                "delivered" if status == "supervisor_handoff_delivered" else "pending"
+            ),
+            "response_text": (
+                "Handoff enviado ao cliente." if status == "supervisor_handoff_delivered" else ""
+            ),
         },
     )
 
