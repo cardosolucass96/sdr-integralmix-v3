@@ -44,4 +44,5 @@ class AgentState(TypedDict):
     response_audio: NotRequired[dict[str, Any] | None]
     supervisor_handoff_request: NotRequired[dict[str, Any] | None]
     supervisor_assignment: NotRequired[dict[str, Any] | None]
+    handoff_delivery_status: NotRequired[str]
     status: NotRequired[str]

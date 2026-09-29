@@ -670,6 +670,14 @@ def _handle_agent_response_delivery(
         if result.delivery_status == "delivered"
         else "supervisor_handoff_pending"
     )
+    _persist_handoff_outcome(
+        session_id=session_id,
+        deal_seq=deal.seq,
+        result=result,
+        status=delivery_status,
+        graph=graph,
+        log_context=log_context,
+    )
     LOGGER.info(
         "integral_mix.supervisor_handoff_completed",
         extra={
@@ -688,6 +696,41 @@ def _handle_agent_response_delivery(
         response_parts=[],
         status=delivery_status,
     )
+
+
+def _persist_handoff_outcome(
+    *,
+    session_id: str,
+    deal_seq: int,
+    result: Any,
+    status: str,
+    graph: Any,
+    log_context: dict[str, object],
+) -> None:
+    try:
+        update_thread_state(
+            session_id,
+            {
+                "supervisor_assignment": {
+                    "deal_seq": deal_seq,
+                    "supervisor_id": result.assignment.supervisor.supervisor_id,
+                    "supervisor_name": result.assignment.supervisor.name,
+                },
+                "handoff_delivery_status": result.delivery_status,
+                "status": status,
+            },
+            graph=graph,
+        )
+    except Exception:
+        LOGGER.exception(
+            "integral_mix.handoff_outcome_checkpoint_failed",
+            extra={
+                **log_context,
+                "pipeline_step": "integral_mix.handoff_outcome_checkpoint_failed",
+                "deal_seq": deal_seq,
+                "handoff_delivery_status": result.delivery_status,
+            },
+        )
 
 
 def _ignore_pipefacil_contact_without_lead(

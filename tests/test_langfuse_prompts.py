@@ -188,6 +188,8 @@ def test_integral_mix_responder_prompt_defines_raquel_voice_and_text_default() -
     assert "cada bloco pode virar uma bolha" in system_prompt
     assert "Use text by default" in system_prompt
     assert "Do not repeat the same content in both formats" in system_prompt
+    assert "não o repita nas perguntas seguintes" in system_prompt
+    assert "Evite começar cada mensagem com 'Obrigada', 'Entendi'" in system_prompt
 
 
 def test_responder_prompt_defines_consultative_conversation_contract() -> None:
@@ -200,6 +202,11 @@ def test_responder_prompt_defines_consultative_conversation_contract() -> None:
     assert "pergunte de novo algo que já foi respondido" in system_prompt
     assert "trate isso primeiro e depois retome a qualificação" in system_prompt
     assert "no máximo uma pergunta principal por mensagem" in system_prompt
+    assert "Se já existir um encaminhamento em supervisor_assignment" in system_prompt
+    assert "Não diga que a qualificação está completa" in system_prompt
+    assert "Cardoso Rações" in system_prompt
+    assert "Agro Cardoso" in system_prompt
+    assert "ração" in system_prompt
     assert "O código decide quais campos obrigatórios faltam" in system_prompt
     assert "known_facts e pending_goal como a fonte atual" in system_prompt
     assert "Pergunte o nome somente quando pending_goal for name" in system_prompt
@@ -225,6 +232,9 @@ def test_interpreter_prompt_validates_contact_profile_name_as_untrusted_context(
     assert "Nunca copie contact_profile_name para qualification_updates.name" in system_prompt
     assert "preencha name somente quando o lead afirmar um nome de pessoa" in system_prompt
     assert "Não deduza a UF pelo nome do município, pelo DDD" in system_prompt
+    assert "'Cardoso Rações'" in system_prompt
+    assert "'Mundo Animal'" in system_prompt
+    assert "Uma negativa explícita do lead sempre prevalece" in system_prompt
     assert "{{contact_profile_label}}" in user_prompt
 
 

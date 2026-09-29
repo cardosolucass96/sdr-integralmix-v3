@@ -324,6 +324,22 @@ def build_response_update(
     logger: Any,
 ) -> dict[str, Any]:
     latest_message = agent_state.get("latest_user_message") or latest_user_message(agent_state)
+    if agent_state.get("supervisor_assignment"):
+        delivery_status = agent_state.get("handoff_delivery_status")
+        status = (
+            "supervisor_handoff_delivered"
+            if delivery_status == "delivered"
+            else "supervisor_handoff_pending"
+        )
+        return {
+            "latest_user_message": latest_message,
+            "response_text": "",
+            "response_media": [],
+            "response_audio": None,
+            "messages": [],
+            "supervisor_handoff_request": None,
+            "status": status,
+        }
     if not latest_message:
         response_text = "Ainda nao recebi nenhuma mensagem do usuario."
         return {

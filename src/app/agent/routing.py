@@ -15,6 +15,8 @@ SUPERVISOR_HANDOFF_NODE = "supervisor-handoff-action"
 def route_after_interpretation(
     state: AgentState,
 ) -> Literal["delegate-specialist", "update-qualification"]:
+    if state.get("supervisor_assignment"):
+        return UPDATE_QUALIFICATION_NODE
     if state.get("requires_specialist") and state.get("specialist_name"):
         return DELEGATE_SPECIALIST_NODE
     return UPDATE_QUALIFICATION_NODE

@@ -76,7 +76,15 @@ class QualificationFactUpdates(BaseModel):
     frequency: Literal["Semanal", "Quinzenal", "Mensal", "Bimestral"] | None = None
     consumption: str | None = None
     store_name: str | None = None
-    works_with_nutrition: Literal["sim", "nao"] | None = None
+    works_with_nutrition: Literal["sim", "nao"] | None = Field(
+        default=None,
+        description=(
+            "For a reseller, use 'sim' when the lead explicitly confirms selling animal feed or "
+            "nutrition, or when the lead-provided store name clearly says it sells feed, such "
+            "as 'Cardoso Rações' or 'Casa da Ração'. Do not infer from generic names such as "
+            "'Agro Cardoso' or 'Mundo Animal'. An explicit lead correction takes precedence."
+        ),
+    )
     product_category: str | None = None
     monthly_volume: str | None = None
     current_brands: str | None = None
@@ -245,7 +253,14 @@ class OpenAIQualificationFactUpdates(BaseModel):
     frequency: Literal["Semanal", "Quinzenal", "Mensal", "Bimestral"] | None
     consumption: str | None
     store_name: str | None
-    works_with_nutrition: Literal["sim", "nao"] | None
+    works_with_nutrition: Literal["sim", "nao"] | None = Field(
+        description=(
+            "For a reseller, use 'sim' when the lead explicitly confirms selling animal feed or "
+            "nutrition, or when the lead-provided store name clearly says it sells feed, such "
+            "as 'Cardoso Rações' or 'Casa da Ração'. Do not infer from generic names such as "
+            "'Agro Cardoso' or 'Mundo Animal'. An explicit lead correction takes precedence."
+        )
+    )
     product_category: str | None
     monthly_volume: str | None
     current_brands: str | None

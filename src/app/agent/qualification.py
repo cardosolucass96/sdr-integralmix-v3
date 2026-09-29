@@ -177,8 +177,36 @@ def _build_handoff_request(facts: dict[str, Any]) -> dict[str, object] | None:
     return proposal.to_handoff_payload()
 
 
+def _preserve_assigned_handoff(
+    state: dict[str, Any],
+    interpretation: IntegralMixTurnInterpretation,
+) -> dict[str, Any]:
+    delivery_status = state.get("handoff_delivery_status")
+    status = (
+        "supervisor_handoff_delivered"
+        if delivery_status == "delivered"
+        else "supervisor_handoff_pending"
+    )
+    return {
+        "known_facts": dict(state.get("known_facts") or {}),
+        "fact_sources": dict(state.get("fact_sources") or {}),
+        "pending_goal": None,
+        "conversation_stage": (
+            "closed" if interpretation.refusal or interpretation.goodbye else "handoff_ready"
+        ),
+        "supervisor_handoff_request": None,
+        "response_text": "",
+        "response_media": [],
+        "response_audio": None,
+        "status": status,
+    }
+
+
 def build_qualification_update(state: dict[str, Any]) -> dict[str, Any]:
     interpretation = _interpretation(state)
+    if state.get("supervisor_assignment"):
+        return _preserve_assigned_handoff(state, interpretation)
+
     facts, sources = _merge_fact_updates(
         dict(state.get("known_facts") or {}),
         dict(state.get("fact_sources") or {}),
@@ -192,8 +220,7 @@ def build_qualification_update(state: dict[str, Any]) -> dict[str, Any]:
         stage = "closed"
     elif pending_goal is None:
         stage = "handoff_ready"
-        if not state.get("supervisor_assignment"):
-            handoff_request = _build_handoff_request(facts)
+        handoff_request = _build_handoff_request(facts)
 
     update: dict[str, Any] = {
         "known_facts": facts,

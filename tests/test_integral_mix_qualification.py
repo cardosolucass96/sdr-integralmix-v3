@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from app.agent.chains.schemas import (
     IntegralMixTurnInterpretation,
+    OpenAIQualificationFactUpdates,
     QualificationFactUpdates,
 )
 from app.agent.nodes.qualification import update_qualification
-from app.agent.routing import route_after_qualification
+from app.agent.routing import route_after_interpretation, route_after_qualification
 
 
 def _turn(
@@ -175,6 +176,43 @@ def test_refusal_or_existing_assignment_prevents_handoff() -> None:
     assert refusal["supervisor_handoff_request"] is None
     assert assigned["supervisor_handoff_request"] is None
     assert route_after_qualification(assigned) == "respond"
+
+
+def test_assignment_freezes_qualification_and_skips_specialist_routing() -> None:
+    prior_facts = {
+        "name": "Lucas",
+        "document": "12345678901",
+        "activity": "revendedor",
+        "store_name": "Cardoso Rações",
+        "monthly_volume": "R$ 15.000",
+    }
+    state = {
+        **_turn(updates={"monthly_volume": "R$ 20.000"}),
+        "known_facts": prior_facts,
+        "fact_sources": {field: "lead_message" for field in prior_facts},
+        "supervisor_assignment": {"supervisor_id": 7},
+        "handoff_delivery_status": "delivered",
+        "requires_specialist": True,
+        "specialist_name": "test_specialist",
+    }
+
+    result = update_qualification(state)
+
+    assert route_after_interpretation(state) == "update-qualification"
+    assert result["known_facts"] == prior_facts
+    assert result["pending_goal"] is None
+    assert result["supervisor_handoff_request"] is None
+    assert result["conversation_stage"] == "handoff_ready"
+    assert result["status"] == "supervisor_handoff_delivered"
+
+
+def test_works_with_nutrition_schema_documents_clear_store_name_inference() -> None:
+    for schema in (QualificationFactUpdates, OpenAIQualificationFactUpdates):
+        description = schema.model_fields["works_with_nutrition"].description
+        assert description is not None
+        assert "Cardoso Rações" in description
+        assert "Mundo Animal" in description
+        assert "explicit lead correction takes precedence" in description
 
 
 def test_changing_activity_clears_facts_from_previous_profile() -> None:

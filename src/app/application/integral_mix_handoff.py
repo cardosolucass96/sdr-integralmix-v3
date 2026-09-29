@@ -350,15 +350,13 @@ def _notify_lead(
     payload = operation.lead_payload
     display_phone = _display_phone(operation)
     contact_line = (
-        f"Você já pode falar diretamente pelo telefone {display_phone}."
+        f"Se preferir, você pode falar diretamente com a equipe pelo telefone {display_phone}. "
         if display_phone != "não cadastrado"
-        else "O time comercial dará continuidade ao seu atendimento."
+        else "O time comercial pode dar continuidade ao seu atendimento. "
     )
     message = (
-        "Prontinho 😊 Seus dados foram encaminhados para "
-        f"{operation.supervisor.name}, responsável comercial da sua região. "
-        f"{contact_line} Por lá, o time consegue orientar sobre produtos, preços, "
-        "condições de pagamento e frete."
+        f"Já encaminhei seus dados para {operation.supervisor.name}, que atende sua região. "
+        f"{contact_line}A equipe também pode ajudar com produtos, preços, pagamento e frete."
     )
     result = send_public_text_message(
         to=payload["lead_phone"],

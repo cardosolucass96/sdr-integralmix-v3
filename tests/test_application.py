@@ -2270,10 +2270,13 @@ def test_supervisor_handoff_updates_pipefacil_notifies_both_parties_and_checkpoi
         "+5585900000000",
         "+55 (11) 00000-0001",
     ]
-    assert "Prontinho" in outbound_messages[1]["text"]
+    assert "Já encaminhei seus dados" in outbound_messages[1]["text"]
+    assert "Prontinho" not in outbound_messages[1]["text"]
     assert all(message["channel_id"] == "channel-example-001" for message in outbound_messages)
     assert checkpoint_updates[0][0] == "deal-example-001"
     assert checkpoint_updates[0][1]["supervisor_assignment"]["deal_seq"] == 100
+    assert checkpoint_updates[-1][1]["handoff_delivery_status"] == "delivered"
+    assert checkpoint_updates[-1][1]["status"] == "supervisor_handoff_delivered"
 
 
 @pytest.mark.parametrize(

@@ -300,6 +300,30 @@ def test_respond_receives_interpreted_qualification_context(monkeypatch) -> None
     assert result["supervisor_handoff_request"] is None
 
 
+def test_respond_suppresses_automatic_reply_after_supervisor_assignment(monkeypatch) -> None:
+    monkeypatch.setattr(
+        response_nodes,
+        "_build_responder_chain",
+        lambda: (_ for _ in ()).throw(AssertionError("assigned leads skip the responder")),
+    )
+    result = response_nodes.respond(
+        {
+            "messages": [HumanMessage(content="15 mil")],
+            "latest_user_message": "15 mil",
+            "supervisor_assignment": {"supervisor_id": 7},
+            "handoff_delivery_status": "delivered",
+            "status": "interpreted",
+        }
+    )
+
+    assert result["response_text"] == ""
+    assert result["response_media"] == []
+    assert result["response_audio"] is None
+    assert result["messages"] == []
+    assert result["supervisor_handoff_request"] is None
+    assert result["status"] == "supervisor_handoff_delivered"
+
+
 def test_respond_accepts_generated_audio_plan(monkeypatch) -> None:
     input_message = HumanMessage(content="Me explica por audio.")
 

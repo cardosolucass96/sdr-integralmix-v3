@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.checkpoint.memory import InMemorySaver
 
 import app.agent.interpretation as interpretation_nodes
 import app.agent.nodes.response as response_nodes
@@ -275,5 +276,91 @@ def test_supervisor_action_node_delegates_to_application_callback(
     assert result["status"] == "supervisor_handoff_delivered"
     assert result["supervisor_assignment"]["supervisor_id"] == 7
     assert result["supervisor_handoff_request"] is None
+    reset_langfuse_clients()
+    get_settings.cache_clear()
+
+
+def test_follow_up_after_handoff_does_not_restart_qualification_or_specialist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LANGFUSE_ENABLED", "false")
+    get_settings.cache_clear()
+    reset_langfuse_clients()
+    graph = graph_module.build_graph(checkpointer=InMemorySaver())
+    interpreter_turns = 0
+    handoff_calls: list[dict[str, object]] = []
+
+    class FakeInterpreterChain:
+        def invoke(self, payload: dict[str, object], config: object | None = None):
+            nonlocal interpreter_turns
+            del payload, config
+            interpreter_turns += 1
+            if interpreter_turns == 1:
+                return IntegralMixTurnInterpretation(
+                    intent="request",
+                    reason="O lead concluiu a qualificação.",
+                    qualification_updates=QualificationFactUpdates(
+                        name="Lucas",
+                        document="12345678901",
+                        activity="revendedor",
+                        city="Fortaleza",
+                        state="CE",
+                        store_name="Cardoso Rações",
+                        works_with_nutrition="sim",
+                        current_brands="Integral Mix",
+                        product_category="Ração para cavalo",
+                        monthly_volume="R$ 15.000",
+                    ),
+                    routing_segment="agro_reseller",
+                )
+            return IntegralMixTurnInterpretation(
+                intent="request",
+                reason="O lead enviou outro valor depois do encaminhamento.",
+                requires_specialist=True,
+                specialist_name="test_specialist",
+                qualification_updates=QualificationFactUpdates(monthly_volume="R$ 20.000"),
+            )
+
+    def handoff_action(request: dict[str, object]) -> dict[str, object]:
+        handoff_calls.append(request)
+        return {
+            "handled": True,
+            "status": "supervisor_handoff_delivered",
+            "handoff_delivery_status": "delivered",
+            "supervisor_assignment": {"deal_seq": 100, "supervisor_id": 7},
+        }
+
+    monkeypatch.setattr(
+        interpretation_nodes,
+        "_build_interpreter_chain",
+        lambda: FakeInterpreterChain(),
+    )
+    monkeypatch.setattr(
+        response_nodes,
+        "_build_responder_chain",
+        lambda: (_ for _ in ()).throw(AssertionError("assigned lead must not get a bot reply")),
+    )
+
+    first = run_agent(
+        {"messages": [HumanMessage(content="Sou revendedor. Cardoso Rações, Fortaleza CE.")]},
+        graph=graph,
+        session_id="handoff-follow-up",
+        integral_mix_handoff_action=handoff_action,
+    )
+    second = run_agent(
+        {"messages": [HumanMessage(content="20 mil")]},
+        graph=graph,
+        session_id="handoff-follow-up",
+        integral_mix_handoff_action=handoff_action,
+    )
+
+    assert first["status"] == "supervisor_handoff_delivered"
+    assert first["known_facts"]["monthly_volume"] == "R$ 15.000"
+    assert second["known_facts"]["monthly_volume"] == "R$ 15.000"
+    assert second["pending_goal"] is None
+    assert second["supervisor_handoff_request"] is None
+    assert second["status"] == "supervisor_handoff_delivered"
+    assert second["response_text"] == ""
+    assert len(handoff_calls) == 1
     reset_langfuse_clients()
     get_settings.cache_clear()
