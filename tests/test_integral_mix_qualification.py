@@ -34,7 +34,7 @@ def test_valid_contact_profile_name_is_reused() -> None:
 
     assert result["known_facts"]["name"] == "Maria da Silva"
     assert result["fact_sources"]["name"] == "contact_profile"
-    assert result["pending_goal"] == "document"
+    assert result["pending_goal"] == "activity"
 
 
 def test_invalid_contact_profile_name_keeps_name_as_next_question() -> None:

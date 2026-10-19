@@ -137,15 +137,15 @@ def _merge_fact_updates(
 
 
 def _pending_goal(facts: dict[str, Any]) -> str | None:
-    required = ["name", "document", "activity"]
+    required = ["name", "activity"]
     activity = facts.get("activity")
     if activity == "criador":
-        required.extend(("city", "state", *_CREATOR_FIELDS))
+        required.extend(("city", "state", "species", "frequency", "document", "consumption"))
     elif activity == "revendedor":
         required.extend(("store_name", "city", "state", "works_with_nutrition"))
         if facts.get("works_with_nutrition") != "nao":
             required.append("current_brands")
-        required.extend(("product_category", "monthly_volume"))
+        required.extend(("product_category", "document", "monthly_volume"))
     else:
         return next((field for field in required if not _has_fact(facts, field)), "activity")
     return next((field for field in required if not _has_fact(facts, field)), None)
