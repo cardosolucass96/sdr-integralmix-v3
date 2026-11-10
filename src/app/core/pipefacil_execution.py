@@ -13,7 +13,7 @@ class PipefacilExecution(BaseModel):
     agentId: str = Field(min_length=1)
     dealId: str = Field(min_length=1)
     generation: int = Field(ge=0)
-    agentVersion: int = Field(ge=1)
+    agentVersion: int = Field(ge=0)
     channelId: str = Field(min_length=1)
     conversationId: str = Field(min_length=1)
     expiresAt: AwareDatetime

@@ -323,3 +323,30 @@ def test_handoff_outbox_stores_execution_without_secrets(monkeypatch):
     assert captured[0]["execution"]["executionId"] == "delivery-1"
     assert "separate-key" not in json.dumps(captured)
     assert "agent-key" not in json.dumps(captured)
+
+
+def test_v2_resume_accepts_initial_agent_version_and_batch_signal():
+    raw = _message_received_payload().model_dump(mode="json")
+    raw["type"] = "attendance.resume"
+    raw["execution"] = settings().pipefacil_execution.model_dump(mode="json")
+    raw["execution"]["agentVersion"] = 0
+    raw["data"]["messages"] = [raw["data"].pop("message")]
+    event = MessageReceivedEventRequest.model_validate(raw)
+    assert event.type == "attendance.resume"
+    assert event.execution.agentVersion == 0
+    assert event.messages_for_processing()[0].execution == event.execution
+
+
+def test_resume_without_execution_is_rejected():
+    raw = _message_received_payload().model_dump(mode="json")
+    raw["type"] = "attendance.resume"
+    with pytest.raises(ValidationError, match="requires a v2 execution"):
+        MessageReceivedEventRequest.model_validate(raw)
+
+
+def test_negative_agent_version_is_rejected():
+    raw = _message_received_payload().model_dump(mode="json")
+    raw["execution"] = settings().pipefacil_execution.model_dump(mode="json")
+    raw["execution"]["agentVersion"] = -1
+    with pytest.raises(ValidationError):
+        MessageReceivedEventRequest.model_validate(raw)

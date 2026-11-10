@@ -170,13 +170,15 @@ class MessageReceivedEventData(BaseModel):
 class MessageReceivedEventRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    type: Literal["message.received"]
+    type: Literal["message.received", "attendance.resume"]
     timestamp: datetime
     data: MessageReceivedEventData
     execution: PipefacilExecution | None = None
 
     @model_validator(mode="after")
     def validate_execution_scope(self) -> MessageReceivedEventRequest:
+        if self.type == "attendance.resume" and self.execution is None:
+            raise ValueError("Attendance resume requires a v2 execution.")
         if self.execution is not None:
             if self.data.deal is None or self.execution.dealId != self.data.deal.id:
                 raise ValueError("Execution does not match webhook deal.")
