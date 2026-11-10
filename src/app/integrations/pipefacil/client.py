@@ -1,13 +1,22 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 
+import app.integrations.pipefacil.execution_client as execution_client
 from app.core.config import Settings, get_settings
-from app.integrations.pipefacil.contracts import PipefacilDeliveryErrorCode
+from app.integrations.pipefacil.client_types import (
+    PipefacilConversationHistoryLookupError,
+    PipefacilDealLookupError,
+    PipefacilDealUpdateError,
+    PipefacilDealUpdateResult,
+    PipefacilDownloadedMedia,
+    PipefacilMediaDownloadError,
+    PipefacilSendMessageError,
+    PipefacilSendMessageResult,
+)
 from app.integrations.pipefacil.conversation import (
     PipefacilConversationHistory,
     PipefacilConversationHistoryError,
@@ -21,111 +30,6 @@ MEDIA_DOWNLOAD_CHUNK_SIZE = 64 * 1024
 OUTBOUND_MEDIA_MESSAGE_TYPES = {"image", "video", "audio", "document"}
 
 
-class PipefacilSendMessageError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        error_code: PipefacilDeliveryErrorCode,
-        status_code: int | None = None,
-        request_id: str | None = None,
-        response_body: Any | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.error_code = error_code
-        self.status_code = status_code
-        self.request_id = request_id
-        self.response_body = response_body
-
-
-class PipefacilMediaDownloadError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        error_code: str,
-        status_code: int | None = None,
-        content_length: int | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.error_code = error_code
-        self.status_code = status_code
-        self.content_length = content_length
-
-
-class PipefacilDealLookupError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        error_code: str,
-        status_code: int | None = None,
-        request_id: str | None = None,
-        response_body: Any | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.error_code = error_code
-        self.status_code = status_code
-        self.request_id = request_id
-        self.response_body = response_body
-
-
-class PipefacilConversationHistoryLookupError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        error_code: str,
-        status_code: int | None = None,
-        request_id: str | None = None,
-        response_body: Any | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.error_code = error_code
-        self.status_code = status_code
-        self.request_id = request_id
-        self.response_body = response_body
-
-
-class PipefacilDealUpdateError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        error_code: str,
-        status_code: int | None = None,
-        request_id: str | None = None,
-        response_body: Any | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.error_code = error_code
-        self.status_code = status_code
-        self.request_id = request_id
-        self.response_body = response_body
-
-
-@dataclass(slots=True)
-class PipefacilSendMessageResult:
-    status_code: int
-    request_id: str | None
-    payload: dict[str, Any] | None
-
-
-@dataclass(frozen=True, slots=True)
-class PipefacilDownloadedMedia:
-    content: bytes
-    content_type: str | None
-    content_length: int
-    status_code: int
-
-
-@dataclass(frozen=True, slots=True)
-class PipefacilDealUpdateResult:
-    status_code: int
-    request_id: str | None
-    payload: dict[str, Any] | None
-
-
 def fetch_deal_by_seq(
     *,
     seq: int | None,
@@ -133,6 +37,8 @@ def fetch_deal_by_seq(
     client: httpx.Client | None = None,
 ) -> dict[str, Any]:
     current_settings = settings or get_settings()
+    if current_settings.pipefacil_execution is not None:
+        return execution_client.fetch_deal(current_settings, client=client, seq=seq)
     if not current_settings.pipefacil_api_key:
         raise PipefacilDealLookupError(
             "PIPEFACIL_API_KEY is required to fetch Pipefacil deal details.",
@@ -195,6 +101,8 @@ def fetch_pipefacil_pipelines(
     client: httpx.Client | None = None,
 ) -> list[dict[str, Any]]:
     current_settings = settings or get_settings()
+    if current_settings.pipefacil_execution is not None:
+        return current_settings.pipefacil_handoff_pipelines
     if not current_settings.pipefacil_api_key:
         raise PipefacilDealLookupError(
             "PIPEFACIL_API_KEY is required to fetch Pipefacil pipelines.",
@@ -251,23 +159,15 @@ def fetch_pipefacil_conversation_history(
     client: httpx.Client | None = None,
 ) -> PipefacilConversationHistory:
     current_settings = settings or get_settings()
+    if current_settings.pipefacil_execution is not None:
+        return execution_client.fetch_history(current_settings, client=client)
     if not current_settings.pipefacil_api_key:
         raise PipefacilConversationHistoryLookupError(
             "PIPEFACIL_API_KEY is required to fetch conversation history.",
             error_code="pipefacil_api_key_missing",
         )
 
-    query_params: dict[str, Any] = {}
-    if deal_seq is not None:
-        query_params["dealSeq"] = deal_seq
-    if deal_id and deal_id.strip():
-        query_params["dealId"] = deal_id.strip()
-    if contact_id and contact_id.strip():
-        query_params["contactId"] = contact_id.strip()
-    if channel_id and channel_id.strip():
-        query_params["channelId"] = channel_id.strip()
-    if limit is not None:
-        query_params["limit"] = limit
+    query_params = _history_query(deal_seq, deal_id, contact_id, channel_id, limit)
 
     if not query_params:
         raise PipefacilConversationHistoryLookupError(
@@ -369,6 +269,9 @@ def update_deal_properties(
             )
         update_payload["notes"] = notes
 
+    if current_settings.pipefacil_execution is not None:
+        return execution_client.update_deal(current_settings, update_payload, client=client)
+
     owns_client = client is None
     current_client = client or _build_client(current_settings)
 
@@ -431,6 +334,11 @@ def update_deal_stage(
         raise PipefacilDealUpdateError(
             "Pipefacil stage id is required to update deal stage.",
             error_code="pipefacil_stage_id_missing",
+        )
+
+    if current_settings.pipefacil_execution is not None:
+        return execution_client.update_deal(
+            current_settings, {"stageId": normalized_stage_id}, client=client
         )
 
     owns_client = client is None
@@ -500,6 +408,11 @@ def send_public_text_message(
         raise PipefacilSendMessageError(
             "Response text cannot be empty when sending Pipefacil outbound messages.",
             error_code="response_text_empty",
+        )
+
+    if current_settings.pipefacil_execution is not None:
+        return execution_client.send_message(
+            current_settings, {"type": "text", "body": message_text}, client=client
         )
 
     payload: dict[str, Any] = {
@@ -594,28 +507,32 @@ def send_whatsapp_media_message(
             error_code="response_media_url_missing",
         )
 
-    parsed_url = urlparse(outbound_media_url)
-    if parsed_url.scheme != "https" or not parsed_url.netloc:
-        raise PipefacilSendMessageError(
-            "Outbound media URL must be absolute HTTPS.",
-            error_code="response_media_url_invalid",
+    _validate_outbound_media_url(outbound_media_url)
+
+    if current_settings.pipefacil_execution is not None:
+        return execution_client.send_message(
+            current_settings,
+            {
+                "type": normalized_media_type,
+                "mediaUrl": outbound_media_url,
+                "caption": caption,
+                "filename": filename,
+                "mimeType": mime_type,
+            },
+            client=client,
         )
 
     payload: dict[str, Any] = {
         "to": phone,
         "type": normalized_media_type,
         "text": None,
-        "channelId": channel_id.strip() if channel_id and channel_id.strip() else None,
-        "senderPhoneNumberId": (
-            sender_phone_number_id.strip()
-            if sender_phone_number_id and sender_phone_number_id.strip()
-            else None
-        ),
+        "channelId": _optional_text(channel_id),
+        "senderPhoneNumberId": (_optional_text(sender_phone_number_id)),
         "mediaAssetId": None,
         "mediaLink": outbound_media_url,
-        "caption": caption.strip() if caption and caption.strip() else None,
-        "filename": filename.strip() if filename and filename.strip() else None,
-        "mimeType": mime_type.strip() if mime_type and mime_type.strip() else None,
+        "caption": _optional_text(caption),
+        "filename": _optional_text(filename),
+        "mimeType": _optional_text(mime_type),
         "templateName": None,
         "templateLanguageCode": None,
         "templateComponents": None,
@@ -793,3 +710,32 @@ def _content_length_header(response: httpx.Response) -> int | None:
         return int(value)
     except ValueError:
         return None
+
+
+def _history_query(deal_seq, deal_id, contact_id, channel_id, limit):
+    query_params: dict[str, Any] = {}
+    if deal_seq is not None:
+        query_params["dealSeq"] = deal_seq
+    if deal_id and deal_id.strip():
+        query_params["dealId"] = deal_id.strip()
+    if contact_id and contact_id.strip():
+        query_params["contactId"] = contact_id.strip()
+    if channel_id and channel_id.strip():
+        query_params["channelId"] = channel_id.strip()
+    if limit is not None:
+        query_params["limit"] = limit
+
+    return query_params
+
+
+def _optional_text(value: str | None) -> str | None:
+    return (value or "").strip() or None
+
+
+def _validate_outbound_media_url(outbound_media_url: str) -> None:
+    parsed_url = urlparse(outbound_media_url)
+    if parsed_url.scheme != "https" or not parsed_url.netloc:
+        raise PipefacilSendMessageError(
+            "Outbound media URL must be absolute HTTPS.",
+            error_code="response_media_url_invalid",
+        )

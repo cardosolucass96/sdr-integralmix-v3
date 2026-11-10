@@ -7,13 +7,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.application.supervisores import IntegralMixSupervisorService, normalize_brazilian_state
-from app.core.config import Settings
+from app.core.config import Settings, with_pipefacil_effect
 from app.core.integral_mix_supervisors import (
     NoEligibleSupervisorError,
     SupervisorAssignment,
     SupervisorHandoffOperation,
     SupervisorHandoffStep,
 )
+from app.core.pipefacil_execution import PipefacilExecution
 from app.integrations.pipefacil import (
     PipefacilDealLookupError,
     PipefacilDealUpdateError,
@@ -23,6 +24,7 @@ from app.integrations.pipefacil import (
     send_public_text_message,
     update_deal_properties,
 )
+from app.integrations.pipefacil.execution_client import fetch_deal, finish_handoff
 
 LOGGER = logging.getLogger(__name__)
 HANDOFF_STAGE_NAMES = frozenset(
@@ -74,6 +76,8 @@ def execute_integral_mix_supervisor_handoff(
         "channel_id": channel_id,
         "sender_phone_number_id": sender_phone_number_id,
     }
+    if settings.pipefacil_execution is not None:
+        handoff_payload["execution"] = settings.pipefacil_execution.model_dump(mode="json")
     assignment = service.assign_supervisor(
         request_key=request_key,
         lead_state=normalized_state,
@@ -128,6 +132,7 @@ def process_supervisor_handoff_operation(
     settings: Settings,
 ) -> bool:
     try:
+        settings = _handoff_execution_settings(operation, settings)
         if not operation.crm_synced:
             receipt = _sync_pipefacil_handoff(operation, settings=settings)
             _mark_step(service, operation.request_key, "crm_synced", receipt)
@@ -136,6 +141,8 @@ def process_supervisor_handoff_operation(
             _mark_step(service, operation.request_key, "supervisor_notified", receipt)
         if not operation.lead_notified:
             receipt = _notify_lead(operation, settings=settings)
+            if settings.pipefacil_execution is not None:
+                receipt["handoff"] = finish_handoff(settings)
             _mark_step(service, operation.request_key, "lead_notified", receipt)
     except (
         PipefacilDealLookupError,
@@ -171,6 +178,33 @@ def process_supervisor_handoff_operation(
         )
         return False
     return True
+
+
+def _handoff_execution_settings(operation, settings: Settings) -> Settings:
+    raw = operation.lead_payload.get("execution")
+    execution = PipefacilExecution.model_validate(raw) if raw is not None else None
+    return settings.model_copy(update={"pipefacil_execution": execution})
+
+
+def _supervisor_sender_settings(operation, settings: Settings) -> Settings:
+    if settings.pipefacil_execution is None:
+        return settings
+    if (
+        not settings.pipefacil_supervisor_api_key
+        or settings.pipefacil_supervisor_api_key == settings.pipefacil_api_key
+    ):
+        raise PipefacilSendMessageError(
+            "Separate supervisor integration is not configured.",
+            error_code="pipefacil_api_key_missing",
+        )
+    # Revalidate the execution before an effect outside its scoped API.
+    fetch_deal(settings, seq=operation.deal_seq)
+    return settings.model_copy(
+        update={
+            "pipefacil_execution": None,
+            "pipefacil_api_key": settings.pipefacil_supervisor_api_key,
+        }
+    )
 
 
 def _sync_pipefacil_handoff(
@@ -334,6 +368,7 @@ def _notify_supervisor(
     payload = operation.lead_payload
     profile = payload["profile"]
     text = _supervisor_message(profile, lead_phone=payload["lead_phone"])
+    settings = _supervisor_sender_settings(operation, settings)
     result = send_public_text_message(
         to=operation.supervisor.phone,
         text=text,
@@ -356,7 +391,7 @@ def _notify_lead(
         text=message,
         channel_id=payload["channel_id"],
         sender_phone_number_id=payload["sender_phone_number_id"],
-        settings=settings,
+        settings=with_pipefacil_effect(settings, "handoff-lead"),
     )
     LOGGER.info(
         "integral_mix.supervisor_lead_notification_sent",

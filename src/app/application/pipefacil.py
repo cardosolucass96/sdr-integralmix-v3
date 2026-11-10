@@ -23,7 +23,7 @@ from app.application.token_budget import (
     normalize_max_tokens,
 )
 from app.application.whatsapp import split_whatsapp_messages
-from app.core.config import Settings
+from app.core.config import Settings, with_pipefacil_effect
 from app.core.integral_mix_supervisors import NoEligibleSupervisorError
 from app.integrations.pipefacil import (
     InboundMediaDownload,
@@ -121,6 +121,7 @@ def handle_pipefacil_message_received(
     idempotency_store: MessageIdempotencyStore | None = None,
     supervisor_service: IntegralMixSupervisorService | None = None,
 ) -> ChatTurnResult:
+    settings = settings.model_copy(update={"pipefacil_execution": payload.execution})
     source_payloads = payload.messages_for_processing()
     latest_payload = source_payloads[-1]
     session_id = resolve_message_received_session_id(latest_payload)
@@ -901,7 +902,7 @@ def deliver_pipefacil_response(
             result = _send_pipefacil_response_part(
                 target,
                 response_part=response_part,
-                settings=settings,
+                settings=with_pipefacil_effect(settings, f"reply-part-{message_part_index}"),
                 generated_media_urls=generated_media_urls,
             )
         except PipefacilSendMessageError as exc:

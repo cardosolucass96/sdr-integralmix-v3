@@ -1,10 +1,12 @@
 """Typed configuration with a strict boundary between secrets and runtime behavior."""
 
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.pipefacil_execution import PipefacilExecution
 
 DEFAULT_LANGFUSE_BASE_URL = "https://langfuse.cardosolucas.com/"
 
@@ -77,6 +79,8 @@ class BootstrapSettings(BaseSettings):
     database_url: str | None = None
     openai_api_key: str | None = None
     pipefacil_api_key: str | None = None
+    pipefacil_supervisor_api_key: str | None = Field(default=None, repr=False)
+    pipefacil_handoff_pipelines: list[dict[str, Any]] = Field(default_factory=list)
     pipefacil_webhook_signature_secret: str | None = None
     elevenlabs_api_key: str | None = None
     langfuse_public_key: str | None = None
@@ -95,6 +99,8 @@ class Settings(RuntimeSettings):
     typed defaults or a persisted snapshot; they are never read from the environment.
     """
 
+    pipefacil_execution: PipefacilExecution | None = None
+    pipefacil_effect_name: str | None = None
     app_env: str = "production"
     app_version: str = "0.1.0"
     database_url: str | None = None
@@ -109,6 +115,8 @@ class Settings(RuntimeSettings):
     cloudflare_tunnel_loglevel: str | None = None
     pipefacil_webhook_signature_enabled: bool = True
     pipefacil_api_key: str | None = None
+    pipefacil_supervisor_api_key: str | None = Field(default=None, repr=False)
+    pipefacil_handoff_pipelines: list[dict[str, Any]] = Field(default_factory=list)
     pipefacil_webhook_signature_secret: str | None = None
     outbound_media_catalog_path: str | None = None
     generated_audio_storage_dir: str = ".runtime/generated-audio"
@@ -163,3 +171,10 @@ def get_settings() -> Settings:
     """Compatibility default for isolated scripts and unit-level helpers."""
 
     return build_execution_settings(get_bootstrap_settings(), RuntimeSettings())
+
+
+def with_pipefacil_effect(settings: Settings, name: str) -> Settings:
+    """Name a durable v2 effect without changing legacy execution snapshots."""
+    if settings.pipefacil_execution is None:
+        return settings
+    return settings.model_copy(update={"pipefacil_effect_name": name})

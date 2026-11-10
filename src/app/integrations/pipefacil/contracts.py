@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.core.pipefacil_execution import PipefacilExecution
+
 PipefacilDeliveryStatus = Literal["sent", "failed"]
 PipefacilDeliveryErrorCode = Literal[
     "pipefacil_api_key_missing",
@@ -171,6 +173,16 @@ class MessageReceivedEventRequest(BaseModel):
     type: Literal["message.received"]
     timestamp: datetime
     data: MessageReceivedEventData
+    execution: PipefacilExecution | None = None
+
+    @model_validator(mode="after")
+    def validate_execution_scope(self) -> MessageReceivedEventRequest:
+        if self.execution is not None:
+            if self.data.deal is None or self.execution.dealId != self.data.deal.id:
+                raise ValueError("Execution does not match webhook deal.")
+            if self.execution.channelId != self.data.channel.id:
+                raise ValueError("Execution does not match webhook channel.")
+        return self
 
     @model_validator(mode="before")
     @classmethod
